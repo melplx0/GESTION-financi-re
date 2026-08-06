@@ -1,0 +1,1558 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Boussole — mon budget</title>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+</head>
+<body>
+<div id="root"><p style="font-family:sans-serif;color:#6C6656;padding:40px;text-align:center;">Chargement de Boussole…</p></div>
+
+<script type="text/plain" id="app-source">
+const { useState, useEffect, useMemo, useRef, useCallback } = React;
+const Papa = window.Papa;
+
+/* ---- icônes (glyphes simples à la place de lucide-react) ---- */
+function IconBase({ glyph, size = 14, style = {}, ...rest }) {
+  return <span aria-hidden="true" style={{ fontSize: size, lineHeight: 1, display: "inline-flex", ...style }} {...rest}>{glyph}</span>;
+}
+const LayoutDashboard = (p) => <IconBase glyph="▦" {...p} />;
+const Wallet = (p) => <IconBase glyph="👛" {...p} />;
+const ClipboardList = (p) => <IconBase glyph="📋" {...p} />;
+const CalendarDays = (p) => <IconBase glyph="📅" {...p} />;
+const ShieldCheck = (p) => <IconBase glyph="🛡️" {...p} />;
+const SettingsIcon = (p) => <IconBase glyph="⚙️" {...p} />;
+const Upload = (p) => <IconBase glyph="⬆️" {...p} />;
+const Download = (p) => <IconBase glyph="⬇️" {...p} />;
+const Plus = (p) => <IconBase glyph="+" {...p} />;
+const X = (p) => <IconBase glyph="✕" {...p} />;
+const ChevronLeft = (p) => <IconBase glyph="‹" {...p} />;
+const ChevronRight = (p) => <IconBase glyph="›" {...p} />;
+const Pencil = (p) => <IconBase glyph="✏️" {...p} />;
+const Trash2 = (p) => <IconBase glyph="🗑️" {...p} />;
+const Check = (p) => <IconBase glyph="✓" {...p} />;
+const HelpCircle = (p) => <IconBase glyph="❓" {...p} />;
+const RefreshCw = (p) => <IconBase glyph="↻" {...p} />;
+const Sparkles = (p) => <IconBase glyph="✨" {...p} />;
+const Trophy = (p) => <IconBase glyph="🏆" {...p} />;
+const Search = (p) => <IconBase glyph="🔍" {...p} />;
+const ChevronDown = (p) => <IconBase glyph="⌄" {...p} />;
+const AlertTriangle = (p) => <IconBase glyph="⚠️" {...p} />;
+const CheckCircle2 = (p) => <IconBase glyph="✅" {...p} />;
+
+/* =========================================================================
+   TOKENS & CONSTANTS
+   ========================================================================= */
+
+const INK = "#20261F";
+const BG = "#F7F4EC";
+const SURFACE = "#FFFFFF";
+const BORDER = "#E4DFCF";
+const EMERALD = "#1F6F5A";
+const EMERALD_SOFT = "#DCEAE3";
+const GOLD = "#B4862B";
+const GOLD_SOFT = "#F1E6CC";
+const BRICK = "#AE5040";
+const BRICK_SOFT = "#F3DEDA";
+const MUTED = "#6C6656";
+
+const MONTHS = ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"];
+const MONTH_SHORT = ["Jan","Fév","Mar","Avr","Mai","Jui","Jul","Aoû","Sep","Oct","Nov","Déc"];
+
+const CATEGORIES = [
+  "Logement","Alimentation","Transports","Santé","Télécom & internet","Assurances",
+  "Abonnements","Restaurants & bars","Sport","Shopping","Sorties & loisirs","Animaux",
+  "Frais pro","Épargne de précaution","Investissement","Divers"
+];
+
+const CATEGORY_ICONS = {
+  "Logement":"🏠","Alimentation":"🛒","Transports":"🚗","Santé":"⚕️",
+  "Télécom & internet":"📶","Assurances":"🛡️","Abonnements":"🔁",
+  "Restaurants & bars":"🍽️","Sport":"🏋️","Shopping":"🛍️","Sorties & loisirs":"🎟️",
+  "Animaux":"🐾","Frais pro":"💼","Épargne de précaution":"🐷","Investissement":"📈","Divers":"✨"
+};
+
+// keyword → catégorie, utilisé pour l'auto-catégorisation à l'import CSV
+const CATEGORY_KEYWORDS = [
+  [/loyer|bailleur|foncia|syndic/i, "Logement"],
+  [/carrefour|leclerc|monoprix|franprix|lidl|auchan|intermarch|biocoop|boulangerie|primeur/i, "Alimentation"],
+  [/sncf|ratp|uber|blablacar|essence|total\s?energ|shell|navigo|idf mobilit/i, "Transports"],
+  [/pharmaci|mutuelle|docteur|dentiste|medecin|hopital|alan/i, "Santé"],
+  [/free|orange|sfr|bouygues|sosh|telecom|internet/i, "Télécom & internet"],
+  [/assurance|maif|maaf|axa|matmut/i, "Assurances"],
+  [/netflix|spotify|disney|deezer|canal|amazon prime|abonnement/i, "Abonnements"],
+  [/restaurant|bar |brasserie|deliveroo|ubereats|comptoir|bistrot/i, "Restaurants & bars"],
+  [/salle de sport|basic\s?fit|fitness|piscine|club sport/i, "Sport"],
+  [/zara|shein|sephora|galeries|h&m|uniqlo|decathlon/i, "Shopping"],
+  [/cinema|concert|theatre|billetterie|fnac spectacle/i, "Sorties & loisirs"],
+  [/veterinaire|animalerie|croquette/i, "Animaux"],
+  [/urssaf|impots\.gouv|siret|freelance/i, "Frais pro"],
+  [/livret|epargne|precaution/i, "Épargne de précaution"],
+  [/bourse|pea|assurance vie|etf|action /i, "Investissement"],
+];
+
+const BUDGET_METHODS = {
+  classique: {
+    label: "50/30/20",
+    tag: "La référence",
+    besoins: 50, envies: 30, epargne: 20,
+    desc: "50 % du revenu pour les besoins, 30 % pour les envies, 20 % pour l'épargne. Un cadre simple, recommandé si ta situation est plutôt équilibrée."
+  },
+  confort: {
+    label: "Confort budgétaire",
+    tag: "60/20/20",
+    besoins: 60, envies: 20, epargne: 20,
+    desc: "60 % besoins, 20 % envies, 20 % épargne. Utile quand les charges fixes pèsent lourd et que tu veux garder de l'air sans sacrifier l'épargne."
+  },
+  basezero: {
+    label: "Base zéro",
+    tag: "Chaque euro a un rôle",
+    besoins: null, envies: null, epargne: null,
+    desc: "Tu attribues chaque euro de revenu à un poste précis, jusqu'à ce qu'il ne reste rien de non affecté. Pas de pourcentage fixe : tout est piloté ligne par ligne."
+  },
+  quatrevingtvingt: {
+    label: "80/20",
+    tag: "Simple et rapide",
+    besoins: 80, envies: 0, epargne: 20,
+    desc: "80 % pour vivre (sans distinguer besoins et envies), 20 % pour l'épargne. Le plus simple à tenir au quotidien."
+  },
+  cascade: {
+    label: "Budget en cascade",
+    tag: "Par ordre de priorité",
+    besoins: null, envies: null, epargne: null,
+    desc: "Tu remplis d'abord ton épargne de précaution, puis les besoins essentiels, et ce qu'il reste va aux envies. L'ordre compte plus que les pourcentages."
+  }
+};
+
+const GROUP_LABELS = { besoins: "Besoin", envies: "Envie", epargne: "Épargne" };
+const GROUP_COLORS = { besoins: GOLD, envies: BRICK, epargne: EMERALD };
+const GROUP_SOFT   = { besoins: GOLD_SOFT, envies: BRICK_SOFT, epargne: EMERALD_SOFT };
+
+const VULN_CRITERIA = [
+  { key:"pro", label:"Stabilité professionnelle", max:6, options:[
+    {v:0,t:"CDI, ancienneté solide, secteur porteur"},
+    {v:1,t:"CDI récent ou poste public"},
+    {v:3,t:"Freelance / CDD avec clientèle stable"},
+    {v:6,t:"Freelance précaire ou recherche d'emploi"}]},
+  { key:"famille", label:"Charges familiales", max:5, options:[
+    {v:0,t:"Aucune personne à charge"},
+    {v:1,t:"Une personne à charge, faible coût"},
+    {v:3,t:"Conjoint·e + un enfant"},
+    {v:5,t:"Famille nombreuse ou personne dépendante"}]},
+  { key:"filet", label:"Filet de sécurité", max:3, options:[
+    {v:0,t:"La famille/les proches peuvent aider en urgence"},
+    {v:1,t:"Une aide partielle est possible"},
+    {v:3,t:"Aucun filet familial, l'épargne est l'unique sécurité"}]},
+  { key:"sante", label:"Santé & imprévus", max:3, options:[
+    {v:0,t:"Bonne santé, mutuelle solide"},
+    {v:1,t:"Quelques frais ponctuels possibles"},
+    {v:3,t:"Santé fragile ou mutuelle faible"}]},
+  { key:"emotion", label:"Confort émotionnel face à l'incertitude", max:3, options:[
+    {v:0,t:"Un matelas raisonnable te suffit pour être serein·e"},
+    {v:1,t:"Ça dépend des périodes"},
+    {v:3,t:"L'incertitude t'angoisse, tu veux un matelas large"}]},
+  { key:"alt", label:"Revenus alternatifs", max:3, options:[
+    {v:0,t:"Plusieurs sources de revenus"},
+    {v:1,t:"Une source secondaire ponctuelle"},
+    {v:3,t:"Revenu unique, aucune alternative"}]},
+  { key:"logement", label:"Stabilité du logement", max:3, options:[
+    {v:0,t:"Propriétaire ou bail stable longue durée"},
+    {v:1,t:"Locataire, bail classique"},
+    {v:3,t:"Situation précaire (sous-location, temporaire)"}]},
+  { key:"dette", label:"Endettement", max:3, options:[
+    {v:0,t:"Aucun crédit en cours"},
+    {v:1,t:"Crédit(s) maîtrisé(s), moins de 20 % du revenu"},
+    {v:3,t:"Endettement élevé, plus de 35 % du revenu"}]},
+];
+const VULN_MAX = VULN_CRITERIA.reduce((s,c)=>s+c.max,0);
+
+/* =========================================================================
+   HELPERS
+   ========================================================================= */
+
+const uid = () => Math.random().toString(36).slice(2,10);
+const clamp = (n,a,b) => Math.max(a, Math.min(b,n));
+const num = (v) => { const n = parseFloat(v); return isNaN(n) ? 0 : n; };
+
+function formatEuro(n, monnaie) {
+  const currency = monnaie === "USD" ? "USD" : monnaie === "CHF" ? "CHF" : "EUR";
+  try {
+    return new Intl.NumberFormat("fr-FR", { style:"currency", currency, maximumFractionDigits: 0 }).format(n || 0);
+  } catch(e) { return `${Math.round(n||0)} €`; }
+}
+
+function itemTotal(item) {
+  const sous = (item.sousDepenses || []).reduce((s,d)=>s+num(d.montant),0);
+  return num(item.montant) + sous;
+}
+
+function monthKey(annee, mois) { return `${annee}-${mois}`; }
+
+/* =========================================================================
+   STORAGE
+   ========================================================================= */
+
+const STORAGE_KEY = "boussole-budget-v1";
+
+function defaultState() {
+  return {
+    settings: { annee: new Date().getFullYear(), moisDebut: "Janvier", monnaie: "EUR", methode: "classique", nom: "" },
+    revenus: {},        // { "2026": { "Janvier": [{id, source, montant}] } }
+    budgetType: [],      // [{id, nom, icone, montant, groupe, categorie, essentiel, sousDepenses}]
+    budgetMois: {},      // { "2026-Juillet": [{...item, prevu, budgetTypeId}] }
+    epargne: { reponses: {}, allocationPct: 100, dejaEpargne: 0 },
+    victoires: []
+  };
+}
+
+async function loadData() {
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (!raw) return defaultState();
+    const parsed = JSON.parse(raw);
+    return { ...defaultState(), ...parsed, settings: { ...defaultState().settings, ...(parsed.settings||{}) } };
+  } catch(e) {
+    return defaultState();
+  }
+}
+
+async function saveData(data) {
+  try { window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); }
+  catch(e) { console.error("Erreur de sauvegarde", e); }
+}
+
+/* =========================================================================
+   PETITS COMPOSANTS UI
+   ========================================================================= */
+
+function Card({ children, className = "", style = {} }) {
+  return <div className={`bb-card ${className}`} style={style}>{children}</div>;
+}
+
+function StatCard({ label, value, sub, accent }) {
+  return (
+    <Card className="bb-stat">
+      <div className="bb-stat-label">{label}</div>
+      <div className="bb-stat-value" style={accent ? { color: accent } : {}}>{value}</div>
+      {sub && <div className="bb-stat-sub">{sub}</div>}
+    </Card>
+  );
+}
+
+function ProgressBar({ pct, color }) {
+  return (
+    <div className="bb-progress-track">
+      <div className="bb-progress-fill" style={{ width: `${clamp(pct,0,100)}%`, background: color }} />
+    </div>
+  );
+}
+
+function IconLogo({ size = 30 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 40 40" style={{ flexShrink:0 }}>
+      <circle cx="20" cy="20" r="18" fill="none" stroke={BORDER} strokeWidth="3" />
+      <path d="M20 3 A17 17 0 0 1 34.7 11.5" fill="none" stroke={GOLD} strokeWidth="3.4" strokeLinecap="round" />
+      <path d="M34.7 11.5 A17 17 0 0 1 27 35.7" fill="none" stroke={BRICK} strokeWidth="3.4" strokeLinecap="round" />
+      <path d="M27 35.7 A17 17 0 0 1 20 3" fill="none" stroke={EMERALD} strokeWidth="3.4" strokeLinecap="round" />
+      <circle cx="20" cy="20" r="4.5" fill={INK} />
+    </svg>
+  );
+}
+
+function EmptyState({ text, cta, onClick }) {
+  return (
+    <div className="bb-empty">
+      <IconLogo size={34} />
+      <p>{text}</p>
+      {cta && <button className="bb-btn bb-btn-primary" onClick={onClick}>{cta}</button>}
+    </div>
+  );
+}
+
+function Select({ value, onChange, options, style }) {
+  return (
+    <div className="bb-select-wrap" style={style}>
+      <select value={value} onChange={e=>onChange(e.target.value)} className="bb-select">
+        {options.map(o => typeof o === "string"
+          ? <option key={o} value={o}>{o}</option>
+          : <option key={o.value} value={o.value}>{o.label}</option>)}
+      </select>
+      <ChevronDown size={13} className="bb-select-caret" />
+    </div>
+  );
+}
+
+function Modal({ title, onClose, children, width = 560 }) {
+  return (
+    <div className="bb-modal-overlay" onClick={onClose}>
+      <div className="bb-modal" style={{ maxWidth: width }} onClick={e=>e.stopPropagation()}>
+        <div className="bb-modal-head">
+          <h3>{title}</h3>
+          <button className="bb-icon-btn" onClick={onClose}><X size={16}/></button>
+        </div>
+        <div className="bb-modal-body">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+/* =========================================================================
+   SIDEBAR
+   ========================================================================= */
+
+const NAV_ITEMS = [
+  { key:"dashboard", label:"Tableau de bord", icon: LayoutDashboard },
+  { key:"revenus", label:"Revenus", icon: Wallet },
+  { key:"budgetType", label:"Budget type", icon: ClipboardList },
+  { key:"budgetMois", label:"Budget du mois", icon: CalendarDays },
+  { key:"epargne", label:"Épargne de précaution", icon: ShieldCheck },
+];
+
+function Sidebar({ page, setPage, state, setState, onExport, onImport, onHelp }) {
+  const fileRef = useRef(null);
+  const { settings } = state;
+
+  const updateSettings = (patch) => setState(s => ({ ...s, settings: { ...s.settings, ...patch } }));
+
+  return (
+    <aside className="bb-sidebar">
+      <div className="bb-brand">
+        <IconLogo />
+        <div>
+          <div className="bb-brand-name">Boussole</div>
+          <div className="bb-brand-sub">{settings.nom ? `Budget de ${settings.nom}` : "mon budget"}</div>
+        </div>
+      </div>
+
+      <nav className="bb-nav">
+        {NAV_ITEMS.map(item => {
+          const Icon = item.icon;
+          return (
+            <button key={item.key} className={`bb-nav-item ${page===item.key?"active":""}`} onClick={()=>setPage(item.key)}>
+              <Icon size={16} />
+              <span>{item.label}</span>
+            </button>
+          );
+        })}
+      </nav>
+
+      <div className="bb-sidebar-section">
+        <div className="bb-sidebar-label">ANNÉE</div>
+        <div className="bb-year-nav">
+          <button className="bb-icon-btn" onClick={()=>updateSettings({ annee: settings.annee - 1 })}><ChevronLeft size={14}/></button>
+          <div className="bb-year-val">{settings.annee}</div>
+          <button className="bb-icon-btn" onClick={()=>updateSettings({ annee: settings.annee + 1 })}><ChevronRight size={14}/></button>
+        </div>
+
+        <div className="bb-sidebar-label">MOIS DE DÉBUT</div>
+        <Select value={settings.moisDebut} onChange={v=>updateSettings({ moisDebut:v })} options={MONTHS} />
+
+        <div className="bb-sidebar-label">MONNAIE</div>
+        <Select value={settings.monnaie} onChange={v=>updateSettings({ monnaie:v })}
+          options={[{value:"EUR",label:"€ Euro"},{value:"USD",label:"$ Dollar"},{value:"CHF",label:"CHF Franc"}]} />
+      </div>
+
+      <div className="bb-sidebar-foot">
+        <button className="bb-link-btn" onClick={onHelp}><HelpCircle size={14}/> Comment ça marche</button>
+        <button className="bb-link-btn" onClick={onExport}><Download size={14}/> Exporter</button>
+        <button className="bb-link-btn" onClick={()=>fileRef.current?.click()}><Upload size={14}/> Importer</button>
+        <input ref={fileRef} type="file" accept="application/json" style={{ display:"none" }}
+          onChange={e => { const f = e.target.files?.[0]; if (f) onImport(f); e.target.value=""; }} />
+      </div>
+    </aside>
+  );
+}
+
+/* =========================================================================
+   STYLES
+   ========================================================================= */
+
+const CSS = `
+  @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap');
+  .bb-root { font-family:'Inter',sans-serif; background:${BG}; color:${INK}; min-height:100vh; }
+  .bb-root * { box-sizing:border-box; }
+  .bb-shell { display:grid; grid-template-columns: 250px 1fr; min-height:100vh; }
+  .bb-sidebar { background:${SURFACE}; border-right:1px solid ${BORDER}; padding:22px 16px; display:flex; flex-direction:column; gap:18px; position:sticky; top:0; height:100vh; overflow-y:auto; }
+  .bb-brand { display:flex; align-items:center; gap:10px; padding-bottom:6px; }
+  .bb-brand-name { font-family:'Fraunces',serif; font-weight:700; font-size:19px; line-height:1; }
+  .bb-brand-sub { font-size:11.5px; color:${MUTED}; margin-top:3px; }
+  .bb-nav { display:flex; flex-direction:column; gap:3px; }
+  .bb-nav-item { display:flex; align-items:center; gap:10px; padding:9px 10px; border-radius:9px; border:none; background:transparent; color:${INK}; font-size:13.5px; font-weight:500; text-align:left; cursor:pointer; font-family:inherit; }
+  .bb-nav-item:hover { background:${BG}; }
+  .bb-nav-item.active { background:${INK}; color:#fff; }
+  .bb-sidebar-section { border-top:1px solid ${BORDER}; padding-top:14px; display:flex; flex-direction:column; gap:6px; }
+  .bb-sidebar-label { font-size:10px; letter-spacing:.06em; color:${MUTED}; font-weight:600; margin-top:8px; }
+  .bb-year-nav { display:flex; align-items:center; justify-content:space-between; border:1px solid ${BORDER}; border-radius:8px; padding:4px 6px; }
+  .bb-year-val { font-family:'IBM Plex Mono',monospace; font-weight:600; font-size:13px; }
+  .bb-sidebar-foot { margin-top:auto; border-top:1px solid ${BORDER}; padding-top:12px; display:flex; flex-direction:column; gap:2px; }
+  .bb-link-btn { display:flex; align-items:center; gap:8px; background:none; border:none; padding:7px 6px; font-size:12.5px; color:${MUTED}; cursor:pointer; border-radius:7px; font-family:inherit; text-align:left; }
+  .bb-link-btn:hover { background:${BG}; color:${INK}; }
+  .bb-main { padding:26px 30px 60px; max-width:1180px; }
+  .bb-page-title { font-family:'Fraunces',serif; font-size:26px; font-weight:600; margin:0 0 3px; }
+  .bb-page-sub { color:${MUTED}; font-size:13.5px; margin:0 0 22px; }
+  .bb-card { background:${SURFACE}; border:1px solid ${BORDER}; border-radius:14px; padding:16px 18px; }
+  .bb-grid { display:grid; gap:12px; }
+  .bb-grid-5 { grid-template-columns: repeat(5,1fr); }
+  .bb-grid-3 { grid-template-columns: repeat(3,1fr); }
+  .bb-grid-2 { grid-template-columns: repeat(2,1fr); }
+  .bb-stat-label { font-size:11px; color:${MUTED}; font-weight:600; text-transform:uppercase; letter-spacing:.03em; margin-bottom:6px; }
+  .bb-stat-value { font-family:'IBM Plex Mono',monospace; font-size:21px; font-weight:600; }
+  .bb-stat-sub { font-size:11px; color:${MUTED}; margin-top:4px; }
+  .bb-section-head { display:flex; align-items:center; justify-content:space-between; margin:26px 0 12px; }
+  .bb-section-title { font-family:'Fraunces',serif; font-size:16.5px; font-weight:600; margin:0; }
+  .bb-section-desc { font-size:12px; color:${MUTED}; margin:2px 0 0; }
+  .bb-btn { border-radius:9px; padding:8px 14px; font-size:12.5px; font-weight:600; cursor:pointer; border:1px solid ${BORDER}; background:${SURFACE}; color:${INK}; font-family:inherit; display:inline-flex; align-items:center; gap:6px; }
+  .bb-btn:hover { border-color:${INK}; }
+  .bb-btn-primary { background:${INK}; color:#fff; border-color:${INK}; }
+  .bb-btn-primary:hover { opacity:.9; }
+  .bb-btn-danger { color:${BRICK}; }
+  .bb-btn-sm { padding:5px 10px; font-size:11.5px; }
+  .bb-icon-btn { border:1px solid ${BORDER}; background:${SURFACE}; border-radius:7px; width:26px; height:26px; display:flex; align-items:center; justify-content:center; cursor:pointer; color:${INK}; }
+  .bb-icon-btn:hover { border-color:${INK}; }
+  .bb-select-wrap { position:relative; }
+  .bb-select { width:100%; appearance:none; border:1px solid ${BORDER}; border-radius:8px; padding:6px 26px 6px 9px; font-size:12.5px; font-family:inherit; background:${SURFACE}; color:${INK}; cursor:pointer; }
+  .bb-select-caret { position:absolute; right:8px; top:50%; transform:translateY(-50%); pointer-events:none; color:${MUTED}; }
+  .bb-input { width:100%; border:1px solid ${BORDER}; border-radius:8px; padding:6px 9px; font-size:12.5px; font-family:inherit; background:${SURFACE}; color:${INK}; }
+  .bb-progress-track { height:6px; border-radius:99px; background:${BG}; overflow:hidden; }
+  .bb-progress-fill { height:100%; border-radius:99px; }
+  .bb-empty { display:flex; flex-direction:column; align-items:center; gap:10px; padding:40px 20px; color:${MUTED}; text-align:center; font-size:13px; }
+  .bb-modal-overlay { position:fixed; inset:0; background:rgba(32,38,31,.45); display:flex; align-items:center; justify-content:center; z-index:50; padding:20px; }
+  .bb-modal { background:${SURFACE}; border-radius:16px; width:100%; max-height:86vh; overflow-y:auto; }
+  .bb-modal-head { display:flex; align-items:center; justify-content:space-between; padding:16px 20px; border-bottom:1px solid ${BORDER}; position:sticky; top:0; background:${SURFACE}; }
+  .bb-modal-head h3 { font-family:'Fraunces',serif; margin:0; font-size:16px; }
+  .bb-modal-body { padding:18px 20px; }
+  .bb-exp-card { border:1px solid ${BORDER}; border-radius:12px; padding:12px 14px; display:flex; flex-direction:column; gap:8px; }
+  .bb-exp-top { display:flex; align-items:flex-start; justify-content:space-between; gap:8px; }
+  .bb-exp-name { font-weight:600; font-size:13.5px; display:flex; align-items:center; gap:7px; }
+  .bb-exp-amt { font-family:'IBM Plex Mono',monospace; font-weight:600; font-size:15px; text-align:right; }
+  .bb-exp-amt-sub { font-size:10.5px; color:${MUTED}; font-weight:400; text-align:right; }
+  .bb-exp-fields { display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px; }
+  .bb-tag { font-size:10px; font-weight:700; padding:2px 7px; border-radius:99px; display:inline-block; }
+  .bb-methods-row { display:flex; gap:8px; flex-wrap:wrap; }
+  .bb-method-btn { border:1px solid ${BORDER}; border-radius:99px; padding:7px 13px; font-size:12px; font-weight:600; background:${SURFACE}; cursor:pointer; font-family:inherit; }
+  .bb-method-btn.active { background:${INK}; color:#fff; border-color:${INK}; }
+  .bb-insight { background:${BG}; border:1px solid ${BORDER}; border-radius:12px; padding:12px 14px; font-size:12.5px; line-height:1.55; }
+  .bb-tabs { display:flex; gap:6px; }
+  .bb-tab { border:1px solid ${BORDER}; background:${SURFACE}; border-radius:8px; padding:6px 10px; font-size:12px; cursor:pointer; font-family:inherit; }
+  .bb-tab.active { background:${INK}; color:#fff; border-color:${INK}; }
+  .bb-row { display:flex; align-items:center; gap:8px; }
+  .bb-between { display:flex; align-items:center; justify-content:space-between; }
+  .bb-toolbar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:14px; }
+  .bb-loading { display:flex; align-items:center; justify-content:center; height:100vh; gap:10px; color:${MUTED}; }
+  table.bb-table { width:100%; border-collapse:collapse; font-size:12.5px; }
+  table.bb-table th { text-align:left; font-size:10.5px; text-transform:uppercase; color:${MUTED}; padding:6px 8px; border-bottom:1px solid ${BORDER}; }
+  table.bb-table td { padding:6px 8px; border-bottom:1px solid ${BORDER}; vertical-align:middle; }
+  .bb-vuln-card { border:1px solid ${BORDER}; border-radius:12px; padding:12px 14px; }
+  .bb-vuln-score { font-family:'IBM Plex Mono',monospace; font-weight:700; font-size:20px; }
+  @media (max-width: 880px) {
+    .bb-shell { grid-template-columns: 1fr; }
+    .bb-sidebar { position:relative; height:auto; flex-direction:column; }
+    .bb-grid-5 { grid-template-columns: repeat(2,1fr); }
+    .bb-grid-3 { grid-template-columns: 1fr; }
+    .bb-grid-2 { grid-template-columns: 1fr; }
+    .bb-exp-fields { grid-template-columns:1fr; }
+    .bb-main { padding:18px; }
+  }
+`;
+
+/* =========================================================================
+   GRAPHIQUES (Chart.js, remplace recharts pour la version HTML autonome)
+   ========================================================================= */
+
+function useChart(canvasRef, buildConfig, deps) {
+  useEffect(() => {
+    if (!canvasRef.current || !window.Chart) return;
+    const chart = new window.Chart(canvasRef.current, buildConfig());
+    return () => chart.destroy();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps);
+}
+
+function GroupedBarChart({ data, series, height = 220, monnaie }) {
+  const ref = useRef(null);
+  useChart(ref, () => ({
+    type: "bar",
+    data: {
+      labels: data.map(d => d.name),
+      datasets: series.map(s => ({ label: s.label, data: data.map(d => d[s.key] || 0), backgroundColor: s.color, borderRadius: 4, maxBarThickness: 26 }))
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { labels: { font: { size: 11 } } },
+        tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${formatEuro(c.parsed.y, monnaie)}` } }
+      },
+      scales: {
+        x: { grid: { display: false }, ticks: { font: { size: 11 } } },
+        y: { grid: { color: BORDER }, ticks: { font: { size: 10 } } }
+      }
+    }
+  }), [JSON.stringify(data), JSON.stringify(series), monnaie]);
+  return <div style={{ height }}><canvas ref={ref}></canvas></div>;
+}
+
+function DonutChart({ data, height = 200, monnaie }) {
+  const ref = useRef(null);
+  useChart(ref, () => ({
+    type: "doughnut",
+    data: { labels: data.map(d => d.name), datasets: [{ data: data.map(d => d.value), backgroundColor: data.map(d => d.color), borderWidth: 0 }] },
+    options: {
+      responsive: true, maintainAspectRatio: false, cutout: "62%",
+      plugins: {
+        legend: { position: "bottom", labels: { font: { size: 11 }, boxWidth: 10 } },
+        tooltip: { callbacks: { label: (c) => `${c.label}: ${formatEuro(c.parsed, monnaie)}` } }
+      }
+    }
+  }), [JSON.stringify(data), monnaie]);
+  return <div style={{ height }}><canvas ref={ref}></canvas></div>;
+}
+
+function LineChart3({ data, series, height = 240, monnaie }) {
+  const ref = useRef(null);
+  useChart(ref, () => ({
+    type: "line",
+    data: {
+      labels: data.map(d => d.name),
+      datasets: series.map(s => ({ label: s.label || s.key, data: data.map(d => d[s.key] || 0), borderColor: s.color, backgroundColor: s.color, tension: .35, pointRadius: 0, borderWidth: 2 }))
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { labels: { font: { size: 11 } } },
+        tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${formatEuro(c.parsed.y, monnaie)}` } }
+      },
+      scales: {
+        x: { grid: { display: false }, ticks: { font: { size: 11 } } },
+        y: { grid: { color: BORDER }, ticks: { font: { size: 10 } } }
+      }
+    }
+  }), [JSON.stringify(data), JSON.stringify(series), monnaie]);
+  return <div style={{ height }}><canvas ref={ref}></canvas></div>;
+}
+
+function ColoredBarChart({ data, height = 220, monnaie }) {
+  const ref = useRef(null);
+  useChart(ref, () => ({
+    type: "bar",
+    data: { labels: data.map(d => d.name), datasets: [{ data: data.map(d => d.total || 0), backgroundColor: data.map(d => d.color), borderRadius: 4, maxBarThickness: 26 }] },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => formatEuro(c.parsed.y, monnaie) } } },
+      scales: {
+        x: { grid: { display: false }, ticks: { font: { size: 11 } } },
+        y: { grid: { color: BORDER }, ticks: { font: { size: 10 } } }
+      }
+    }
+  }), [JSON.stringify(data), monnaie]);
+  return <div style={{ height }}><canvas ref={ref}></canvas></div>;
+}
+
+/* =========================================================================
+   APP ROOT  (les composants de pages sont ajoutés plus bas dans ce fichier)
+   ========================================================================= */
+
+function App() {
+  const [state, setState] = useState(null);
+  const [page, setPage] = useState("dashboard");
+  const [showHelp, setShowHelp] = useState(false);
+  const firstLoad = useRef(true);
+
+  useEffect(() => {
+    document.title = "Boussole — mon budget";
+    loadData().then(setState);
+  }, []);
+
+  useEffect(() => {
+    if (!state) return;
+    if (firstLoad.current) { firstLoad.current = false; return; }
+    const t = setTimeout(() => saveData(state), 500);
+    return () => clearTimeout(t);
+  }, [state]);
+
+  const onExport = useCallback(() => {
+    if (!state) return;
+    const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = "boussole-budget-export.json"; a.click();
+    URL.revokeObjectURL(url);
+  }, [state]);
+
+  const onImport = useCallback((file) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const parsed = JSON.parse(e.target.result);
+        setState({ ...defaultState(), ...parsed });
+      } catch(err) { alert("Fichier invalide."); }
+    };
+    reader.readAsText(file);
+  }, []);
+
+  if (!state) {
+    return <div className="bb-root"><style>{CSS}</style><div className="bb-loading"><IconLogo size={22}/> Chargement…</div></div>;
+  }
+
+  const pageProps = { state, setState };
+
+  return (
+    <div className="bb-root">
+      <style>{CSS}</style>
+      <div className="bb-shell">
+        <Sidebar page={page} setPage={setPage} state={state} setState={setState}
+          onExport={onExport} onImport={onImport} onHelp={()=>setShowHelp(true)} />
+        <main className="bb-main">
+          {page === "dashboard" && <Dashboard {...pageProps} />}
+          {page === "revenus" && <RevenusPage {...pageProps} />}
+          {page === "budgetType" && <BudgetTypePage {...pageProps} />}
+          {page === "budgetMois" && <BudgetMoisPage {...pageProps} />}
+          {page === "epargne" && <EpargnePage {...pageProps} />}
+        </main>
+      </div>
+      {showHelp && (
+        <Modal title="Comment ça marche" onClose={()=>setShowHelp(false)}>
+          <p style={{fontSize:13, lineHeight:1.7}}>
+            1. Dans <b>Budget type</b>, liste tes dépenses récurrentes (loyer, abonnements, courses…) : c'est ton mois de référence.<br/><br/>
+            2. Dans <b>Budget du mois</b>, choisis un mois puis clique sur <b>Copier le budget type</b> pour partir de cette base, ou importe un relevé bancaire pour que l'outil repère et regroupe tes dépenses automatiquement.<br/><br/>
+            3. Renseigne tes <b>Revenus</b> mois par mois — l'outil s'adapte même s'ils varient.<br/><br/>
+            4. Choisis ta <b>méthode de budget</b> (50/30/20 et 4 alternatives) pour comparer ce que tu dépenses à ce que tu t'étais fixé.<br/><br/>
+            5. <b>Épargne de précaution</b> t'aide à calculer le matelas de sécurité adapté à ta situation et à suivre ta progression.<br/><br/>
+            Toutes tes données restent uniquement dans ton espace personnel.
+          </p>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+/* =========================================================================
+   CALCULS PARTAGÉS
+   ========================================================================= */
+
+function groupTotals(items) {
+  const t = { besoins:0, envies:0, epargne:0 };
+  items.forEach(it => { t[it.groupe] = (t[it.groupe]||0) + itemTotal(it); });
+  return t;
+}
+
+function byCategorie(items) {
+  const t = {};
+  items.forEach(it => { t[it.categorie] = (t[it.categorie]||0) + itemTotal(it); });
+  return t;
+}
+
+function getMonthItems(state, annee, mois) { return state.budgetMois[monthKey(annee,mois)] || []; }
+function getMonthRevenus(state, annee, mois) { return (state.revenus[annee]||{})[mois] || []; }
+function sumList(list) { return list.reduce((s,i)=>s+num(i.montant),0); }
+
+function yearRevenu(state, annee) {
+  const months = state.revenus[annee] || {};
+  return Object.values(months).reduce((s,l)=>s+sumList(l),0);
+}
+function yearDepenses(state, annee) {
+  return MONTHS.reduce((s,m)=> s + sumList((state.budgetMois[monthKey(annee,m)]||[]).map(it=>({montant:itemTotal(it)}))), 0);
+}
+function yearDepensesEssentielles(state, annee) {
+  return MONTHS.reduce((s,m)=>{
+    const items = getMonthItems(state, annee, m).filter(it=>it.essentiel);
+    return s + items.reduce((a,it)=>a+itemTotal(it),0);
+  },0);
+}
+function methodConseille(methode, revenu) {
+  const m = BUDGET_METHODS[methode];
+  if (m.besoins == null) return null;
+  return { besoins: revenu*m.besoins/100, envies: revenu*m.envies/100, epargne: revenu*m.epargne/100 };
+}
+function budgetTypeGroupTotals(state) { return groupTotals(state.budgetType); }
+
+/* =========================================================================
+   TABLEAU DE BORD
+   ========================================================================= */
+
+function MethodSelector({ state, setState }) {
+  const methode = state.settings.methode;
+  const m = BUDGET_METHODS[methode];
+  return (
+    <Card style={{marginTop:14}}>
+      <div className="bb-row" style={{justifyContent:"space-between", marginBottom:10}}>
+        <div>
+          <div className="bb-section-title" style={{fontSize:14.5}}>Ma méthode de budget</div>
+          <div className="bb-section-desc">Choisis celle qui colle le mieux à ta réalité. Tu peux en changer à tout moment.</div>
+        </div>
+      </div>
+      <div className="bb-methods-row">
+        {Object.entries(BUDGET_METHODS).map(([key,mm]) => (
+          <button key={key} className={`bb-method-btn ${methode===key?"active":""}`}
+            onClick={()=>setState(s=>({...s, settings:{...s.settings, methode:key}}))}>
+            {mm.label}
+          </button>
+        ))}
+      </div>
+      <p style={{fontSize:12, color:MUTED, marginTop:10, marginBottom:0, lineHeight:1.6}}>
+        <b>{m.label}</b> · {m.tag} — {m.desc}
+      </p>
+    </Card>
+  );
+}
+
+function Dashboard({ state, setState }) {
+  const { settings } = state;
+  const [viewMode, setViewMode] = useState("annee");
+  const [selMois, setSelMois] = useState(MONTHS[new Date().getMonth()]);
+  const [donutView, setDonutView] = useState("groupe");
+  const [victoireInput, setVictoireInput] = useState({emoji:"🎯", texte:""});
+
+  const annee = settings.annee;
+  const revenuAnnuel = yearRevenu(state, annee);
+  const depensesAnnuel = yearDepenses(state, annee);
+  const essentielsAnnuel = yearDepensesEssentielles(state, annee);
+  const resteAVivreAnnuel = revenuAnnuel - essentielsAnnuel;
+  const capaciteEpargneAnnuel = revenuAnnuel - depensesAnnuel;
+  const budgetTypeAnnuel = state.budgetType.reduce((s,it)=>s+itemTotal(it),0) * 12;
+  const ecartAnnuel = budgetTypeAnnuel - depensesAnnuel;
+
+  const revenuMois = sumList(getMonthRevenus(state, annee, selMois));
+  const itemsMois = getMonthItems(state, annee, selMois);
+  const depensesMois = itemsMois.reduce((s,it)=>s+itemTotal(it),0);
+  const essentielsMois = itemsMois.filter(it=>it.essentiel).reduce((s,it)=>s+itemTotal(it),0);
+  const resteAVivreMois = revenuMois - essentielsMois;
+  const capaciteEpargneMois = revenuMois - depensesMois;
+  const budgetTypeTotalMensuel = state.budgetType.reduce((s,it)=>s+itemTotal(it),0);
+  const ecartMois = budgetTypeTotalMensuel - depensesMois;
+
+  const stats = viewMode === "annee"
+    ? [
+      { label:"Revenu annuel net", value: formatEuro(revenuAnnuel, settings.monnaie), sub: `${formatEuro(revenuAnnuel/12, settings.monnaie)} / mois en moyenne` },
+      { label:"Dépensé sur l'année", value: formatEuro(depensesAnnuel, settings.monnaie), sub: `${formatEuro(depensesAnnuel/12, settings.monnaie)} / mois en moyenne` },
+      { label:"Reste à vivre", value: formatEuro(resteAVivreAnnuel, settings.monnaie), sub: "après tes dépenses essentielles" },
+      { label:"Capacité d'épargne", value: formatEuro(capaciteEpargneAnnuel, settings.monnaie), sub: revenuAnnuel? `${Math.round(capaciteEpargneAnnuel/revenuAnnuel*100)} % des revenus` : "—" , accent: capaciteEpargneAnnuel>=0?EMERALD:BRICK},
+      { label:"Écart au budget", value: formatEuro(Math.abs(ecartAnnuel), settings.monnaie), sub: ecartAnnuel>=0? "sous ton budget type, bravo 👏" : "au-dessus de ton budget type", accent: ecartAnnuel>=0?EMERALD:BRICK },
+    ]
+    : [
+      { label:"Revenu du mois", value: formatEuro(revenuMois, settings.monnaie) },
+      { label:"Dépensé ce mois", value: formatEuro(depensesMois, settings.monnaie), sub: revenuMois? `${Math.round(depensesMois/revenuMois*100)} % du revenu` : "—" },
+      { label:"Reste à vivre", value: formatEuro(resteAVivreMois, settings.monnaie), sub:"après tes dépenses essentielles" },
+      { label:"Capacité d'épargne", value: formatEuro(capaciteEpargneMois, settings.monnaie), accent: capaciteEpargneMois>=0?EMERALD:BRICK },
+      { label:"Écart au budget", value: formatEuro(Math.abs(ecartMois), settings.monnaie), sub: ecartMois>=0? "sous ton budget type" : "au-dessus du budget type", accent: ecartMois>=0?EMERALD:BRICK },
+    ];
+
+  // épargne de précaution mini
+  const vulnScore = VULN_CRITERIA.reduce((s,c)=> s + (state.epargne.reponses[c.key] ?? c.options[0].v), 0);
+  const objectifMois = 3 + Math.round((vulnScore/VULN_MAX)*3);
+  const besoinsTypeMensuel = state.budgetType.filter(i=>i.essentiel).reduce((s,i)=>s+itemTotal(i),0);
+  const objectifEuros = objectifMois * (besoinsTypeMensuel || budgetTypeTotalMensuel/2 || 0);
+  const dejaEpargne = num(state.epargne.dejaEpargne);
+  const epargnePct = objectifEuros ? clamp(dejaEpargne/objectifEuros*100,0,100) : 0;
+
+  // méthode & conseillé
+  const conseille = methodConseille(settings.methode, revenuMois);
+  const typeTotals = budgetTypeGroupTotals(state);
+  const reelTotals = groupTotals(itemsMois);
+
+  const trois = ["besoins","envies","epargne"].map(g => {
+    const conseilleVal = conseille ? conseille[g] : typeTotals[g];
+    const reelVal = reelTotals[g] || 0;
+    const reste = conseilleVal - reelVal;
+    return { g, label: g==="besoins"?"Besoins":g==="envies"?"Envies":"Épargne", conseilleVal, reelVal, reste,
+      pct: conseilleVal? Math.round(reelVal/conseilleVal*100) : 0 };
+  });
+
+  const barData = trois.map(t => ({ name:t.label, Conseillé: Math.round(t.conseilleVal), "Budget type": Math.round(typeTotals[t.g]||0), Réel: Math.round(t.reelVal) }));
+
+  const donutData = donutView === "groupe"
+    ? trois.filter(t=>t.reelVal>0).map(t => ({ name:t.label, value: Math.round(t.reelVal), color: GROUP_COLORS[t.g] }))
+    : Object.entries(byCategorie(itemsMois)).filter(([,v])=>v>0).map(([k,v],i) => ({ name:k, value:Math.round(v), color:[GOLD,BRICK,EMERALD,"#7C8FA6","#C08A2E","#8A6BAE"][i%6] }));
+
+  // insight du mois
+  const grpMontee = trois.slice().sort((a,b)=> (b.reelVal-(typeTotals[b.g]||0)) - (a.reelVal-(typeTotals[a.g]||0)))[0];
+  const ecartVsType = depensesMois - budgetTypeTotalMensuel;
+  const insightMois = budgetTypeTotalMensuel > 0 ? (
+    `Tu as dépensé ${formatEuro(depensesMois, settings.monnaie)} en ${selMois.toLowerCase()}, soit ${formatEuro(Math.abs(ecartVsType), settings.monnaie)} ${ecartVsType>=0?"de plus":"de moins"} que ton budget type (${budgetTypeTotalMensuel? Math.round(depensesMois/budgetTypeTotalMensuel*100):0} % du prévu). ` +
+    (grpMontee && grpMontee.reelVal - (typeTotals[grpMontee.g]||0) > 0 ? `C'est surtout ${grpMontee.label.toLowerCase()} qui tire la hausse (+${formatEuro(grpMontee.reelVal-(typeTotals[grpMontee.g]||0), settings.monnaie)} vs prévu).` : "Tu es globalement aligné·e avec ton budget type.")
+  ) : "Renseigne ton Budget type pour obtenir des comparaisons automatiques ici.";
+
+  // évolution sur l'année
+  const evolData = MONTHS.map(m => {
+    const r = sumList(getMonthRevenus(state, annee, m));
+    const d = getMonthItems(state, annee, m).reduce((s,it)=>s+itemTotal(it),0);
+    return { name: MONTH_SHORT[MONTHS.indexOf(m)], Revenu: Math.round(r), Dépenses: Math.round(d), Reste: Math.round(r-d) };
+  });
+  const lastWithData = [...MONTHS].reverse().find(m => getMonthItems(state,annee,m).length || getMonthRevenus(state,annee,m).length);
+  let evolInsight = "Ajoute des revenus et des dépenses pour voir ton évolution sur l'année.";
+  if (lastWithData) {
+    const r = sumList(getMonthRevenus(state, annee, lastWithData));
+    const d = getMonthItems(state, annee, lastWithData).reduce((s,it)=>s+itemTotal(it),0);
+    const reste = r - d;
+    evolInsight = `${lastWithData} : revenu de ${formatEuro(r,settings.monnaie)}, dépenses de ${formatEuro(d,settings.monnaie)} (soit ${r? Math.round(d/r*100):0} % de ton revenu). Il te restait ${formatEuro(reste,settings.monnaie)} (${r?Math.round(reste/r*100):0} % de ton revenu).`;
+  }
+
+  const addVictoire = () => {
+    if (!victoireInput.texte.trim()) return;
+    setState(s => ({ ...s, victoires: [...s.victoires, { id:uid(), emoji:victoireInput.emoji, texte:victoireInput.texte, fait:false }] }));
+    setVictoireInput({ emoji:"🎯", texte:"" });
+  };
+  const toggleVictoire = (id) => setState(s => ({ ...s, victoires: s.victoires.map(v=>v.id===id?{...v,fait:!v.fait}:v) }));
+  const doneCount = state.victoires.filter(v=>v.fait).length;
+
+  return (
+    <div>
+      <div className="bb-between">
+        <div>
+          <h1 className="bb-page-title">Tableau de bord</h1>
+          <p className="bb-page-sub">Une vue claire de ton mois — ou de ton année. 💫</p>
+        </div>
+        <div className="bb-row">
+          <button className="bb-icon-btn" onClick={()=>setState(s=>({...s, settings:{...s.settings, annee:s.settings.annee-1}}))}><ChevronLeft size={14}/></button>
+          <div style={{fontWeight:700, minWidth:70, textAlign:"center"}}>Année {annee}</div>
+          <button className="bb-icon-btn" onClick={()=>setState(s=>({...s, settings:{...s.settings, annee:s.settings.annee+1}}))}><ChevronRight size={14}/></button>
+          <Select value={selMois} onChange={setSelMois} options={MONTHS} style={{width:130}} />
+          <div className="bb-tabs">
+            <button className={`bb-tab ${viewMode==="mois"?"active":""}`} onClick={()=>setViewMode("mois")}>Ce mois</button>
+            <button className={`bb-tab ${viewMode==="annee"?"active":""}`} onClick={()=>setViewMode("annee")}>Année</button>
+          </div>
+        </div>
+      </div>
+
+      <div className="bb-grid bb-grid-5" style={{marginTop:18}}>
+        {stats.map(s => <StatCard key={s.label} {...s} />)}
+      </div>
+
+      <div className="bb-grid bb-grid-2" style={{marginTop:14}}>
+        <Card>
+          <div className="bb-between">
+            <div className="bb-section-title" style={{fontSize:14.5}}>🐷 Épargne de précaution</div>
+          </div>
+          <div style={{fontSize:12, color:MUTED, margin:"4px 0 10px"}}>Objectif : {objectifMois} mois de besoins essentiels.</div>
+          <ProgressBar pct={epargnePct} color={EMERALD} />
+          <div style={{display:"flex",justifyContent:"space-between",fontSize:11.5,color:MUTED,marginTop:6}}>
+            <span>{formatEuro(dejaEpargne, settings.monnaie)} épargnés</span>
+            <span>Objectif {formatEuro(objectifEuros, settings.monnaie)} · {Math.round(epargnePct)}%</span>
+          </div>
+        </Card>
+        <Card>
+          <div className="bb-between">
+            <div className="bb-section-title" style={{fontSize:14.5}}><Trophy size={14} style={{verticalAlign:-2, marginRight:5}}/>Mes victoires</div>
+            <span style={{fontSize:11, color:MUTED}}>{doneCount}/{state.victoires.length}</span>
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:5, margin:"8px 0"}}>
+            {state.victoires.map(v => (
+              <div key={v.id} className="bb-row" style={{cursor:"pointer"}} onClick={()=>toggleVictoire(v.id)}>
+                <span style={{opacity:v.fait?1:.4}}>{v.fait?"✅":"⬜"}</span>
+                <span style={{fontSize:12.5, textDecoration:v.fait?"line-through":"none", color:v.fait?MUTED:INK}}>{v.emoji} {v.texte}</span>
+              </div>
+            ))}
+          </div>
+          <div className="bb-row">
+            <input className="bb-input" style={{width:44, textAlign:"center", flex:"0 0 auto"}} value={victoireInput.emoji} onChange={e=>setVictoireInput(v=>({...v,emoji:e.target.value}))} />
+            <input className="bb-input" placeholder="ex. Mettre 200 € de côté" value={victoireInput.texte} onChange={e=>setVictoireInput(v=>({...v,texte:e.target.value}))} onKeyDown={e=>e.key==="Enter"&&addVictoire()} />
+            <button className="bb-btn bb-btn-primary bb-btn-sm" onClick={addVictoire}>Ajouter</button>
+          </div>
+        </Card>
+      </div>
+
+      <MethodSelector state={state} setState={setState} />
+
+      <div className="bb-section-head">
+        <div>
+          <h3 className="bb-section-title">Mes 3 catégories de dépenses — {selMois}</h3>
+        </div>
+      </div>
+      <div className="bb-grid bb-grid-3">
+        {trois.map(t => (
+          <Card key={t.g}>
+            <div className="bb-stat-label" style={{color:GROUP_COLORS[t.g]}}>{t.label.toUpperCase()} {conseille && `(${BUDGET_METHODS[settings.methode][t.g]} %)`}</div>
+            <div className="bb-stat-value">{formatEuro(t.reelVal, settings.monnaie)} <span style={{fontSize:12, fontWeight:500, color:MUTED}}>· {t.pct}%</span></div>
+            <ProgressBar pct={t.pct} color={GROUP_COLORS[t.g]} />
+            <div style={{fontSize:11, color:MUTED, marginTop:6}}>
+              Budget conseillé de {formatEuro(t.conseilleVal, settings.monnaie)}
+              {t.reste >= 0 ? `, il te reste ${formatEuro(t.reste, settings.monnaie)} ✅` : `, tu dépasses de ${formatEuro(-t.reste, settings.monnaie)} ⚠️`}
+            </div>
+          </Card>
+        ))}
+      </div>
+
+      <div className="bb-grid bb-grid-2" style={{marginTop:14, alignItems:"stretch"}}>
+        <Card>
+          <div className="bb-section-title" style={{fontSize:14.5, marginBottom:10}}>Budget type vs réel</div>
+          <GroupedBarChart height={220} monnaie={settings.monnaie} data={barData}
+            series={[{key:"Conseillé",label:"Conseillé",color:GOLD_SOFT},{key:"Budget type",label:"Budget type",color:BORDER},{key:"Réel",label:"Réel",color:EMERALD}]} />
+        </Card>
+        <Card>
+          <div className="bb-between" style={{marginBottom:10}}>
+            <div className="bb-section-title" style={{fontSize:14.5}}>Répartition réelle</div>
+            <div className="bb-tabs">
+              <button className={`bb-tab ${donutView==="categorie"?"active":""}`} onClick={()=>setDonutView("categorie")}>Par catégorie</button>
+              <button className={`bb-tab ${donutView==="groupe"?"active":""}`} onClick={()=>setDonutView("groupe")}>Vue d'ensemble</button>
+            </div>
+          </div>
+          {donutData.length === 0 ? <EmptyState text="Pas encore de dépenses ce mois." /> : (
+            <DonutChart height={200} monnaie={settings.monnaie} data={donutData} />
+          )}
+        </Card>
+      </div>
+      <div className="bb-insight" style={{marginTop:12}}>{insightMois}</div>
+
+      <div className="bb-section-head">
+        <div>
+          <h3 className="bb-section-title">Évolution sur l'année</h3>
+          <p className="bb-section-desc">Tes revenus, tes dépenses et ce qu'il te reste, mois par mois.</p>
+        </div>
+      </div>
+      <Card>
+        <LineChart3 height={240} monnaie={settings.monnaie} data={evolData}
+          series={[{key:"Revenu",label:"Revenu",color:EMERALD},{key:"Dépenses",label:"Dépenses",color:BRICK},{key:"Reste",label:"Reste",color:"#7C8FA6"}]} />
+        <div className="bb-insight" style={{marginTop:10}}>{evolInsight}</div>
+      </Card>
+
+      <div style={{textAlign:"center", fontSize:11, color:MUTED, marginTop:22}}>Fait avec 🧭 par toi-même, pour toi-même.</div>
+    </div>
+  );
+}
+
+/* =========================================================================
+   REVENUS
+   ========================================================================= */
+
+function RevenusPage({ state, setState }) {
+  const { settings } = state;
+  const annee = settings.annee;
+
+  const updateMonth = (mois, list) => {
+    setState(s => ({ ...s, revenus: { ...s.revenus, [annee]: { ...(s.revenus[annee]||{}), [mois]: list } } }));
+  };
+
+  const addLine = (mois) => {
+    const list = getMonthRevenus(state, annee, mois);
+    updateMonth(mois, [...list, { id:uid(), source:"", montant:0 }]);
+  };
+  const updateLine = (mois, id, patch) => {
+    const list = getMonthRevenus(state, annee, mois).map(l => l.id===id ? {...l, ...patch} : l);
+    updateMonth(mois, list);
+  };
+  const removeLine = (mois, id) => {
+    updateMonth(mois, getMonthRevenus(state, annee, mois).filter(l=>l.id!==id));
+  };
+  const copyPrevMonth = (mois) => {
+    const idx = MONTHS.indexOf(mois);
+    if (idx===0) return;
+    const prev = getMonthRevenus(state, annee, MONTHS[idx-1]);
+    updateMonth(mois, prev.map(l => ({ ...l, id:uid() })));
+  };
+
+  const totalAnnee = yearRevenu(state, annee);
+  const moyenneMensuelle = totalAnnee/12;
+
+  // répartition par source sur l'année
+  const bySource = {};
+  Object.values(state.revenus[annee]||{}).forEach(list => list.forEach(l => { bySource[l.source||"Sans nom"] = (bySource[l.source||"Sans nom"]||0) + num(l.montant); }));
+  const pieData = Object.entries(bySource).filter(([,v])=>v>0).map(([k,v],i)=>({ name:k, value:Math.round(v), color:[EMERALD,GOLD,BRICK,"#7C8FA6","#8A6BAE"][i%5] }));
+
+  const evolData = MONTHS.map(m => ({ name: MONTH_SHORT[MONTHS.indexOf(m)], mois:m, total: Math.round(sumList(getMonthRevenus(state, annee, m))) }));
+
+  return (
+    <div>
+      <h1 className="bb-page-title">Revenus</h1>
+      <p className="bb-page-sub">Tes entrées d'argent nettes, mois par mois.</p>
+
+      <div className="bb-grid bb-grid-2">
+        <Card>
+          <div className="bb-section-title" style={{fontSize:14}}>Répartition de mes revenus sur l'année</div>
+          <div style={{margin:"10px 0"}}>
+            <div style={{fontSize:11, color:MUTED}}>MOYENNE MENSUELLE</div>
+            <div className="bb-stat-value" style={{fontSize:22}}>{formatEuro(moyenneMensuelle, settings.monnaie)}</div>
+            <div style={{fontSize:11, color:MUTED}}>Total sur l'année : {formatEuro(totalAnnee, settings.monnaie)}</div>
+          </div>
+          {pieData.length ? (
+            <DonutChart height={180} monnaie={settings.monnaie} data={pieData} />
+          ) : <EmptyState text="Ajoute des revenus pour voir leur répartition." />}
+        </Card>
+        <Card>
+          <div className="bb-section-title" style={{fontSize:14, marginBottom:8}}>Évolution de mes revenus par mois</div>
+          <ColoredBarChart height={220} monnaie={settings.monnaie}
+            data={evolData.map(d => ({ ...d, color: d.total >= moyenneMensuelle ? EMERALD : "#8A6BAE" }))} />
+          <p style={{fontSize:11, color:MUTED, marginTop:6}}>En vert : les mois au-dessus de ta moyenne lissée. En violet : les mois en-dessous.</p>
+        </Card>
+      </div>
+
+      <div className="bb-section-head"><h3 className="bb-section-title">Détail mois par mois</h3></div>
+      <div className="bb-grid bb-grid-3">
+        {MONTHS.map(mois => {
+          const list = getMonthRevenus(state, annee, mois);
+          const total = sumList(list);
+          return (
+            <Card key={mois}>
+              <div className="bb-between">
+                <div style={{fontWeight:700, fontSize:13.5}}>{mois} {annee}</div>
+                <div style={{fontFamily:"'IBM Plex Mono',monospace", fontWeight:600}}>{formatEuro(total, settings.monnaie)}</div>
+              </div>
+              <div style={{display:"flex", flexDirection:"column", gap:6, margin:"10px 0"}}>
+                {list.map(l => (
+                  <div key={l.id} className="bb-row">
+                    <input className="bb-input" placeholder="ex. Salaire" value={l.source} onChange={e=>updateLine(mois,l.id,{source:e.target.value})} />
+                    <input className="bb-input" style={{width:80}} type="number" value={l.montant} onChange={e=>updateLine(mois,l.id,{montant:e.target.value})} />
+                    <button className="bb-icon-btn" onClick={()=>removeLine(mois,l.id)}><X size={13}/></button>
+                  </div>
+                ))}
+                {list.length===0 && <div style={{fontSize:11.5, color:MUTED}}>Aucun revenu renseigné.</div>}
+              </div>
+              <div className="bb-row">
+                <button className="bb-btn bb-btn-sm" onClick={()=>addLine(mois)}><Plus size={12}/> Ajouter</button>
+                <button className="bb-btn bb-btn-sm" onClick={()=>copyPrevMonth(mois)}><RefreshCw size={12}/> Copier le mois précédent</button>
+              </div>
+            </Card>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* =========================================================================
+   CARTE DE DÉPENSE (partagée entre Budget type et Budget du mois)
+   ========================================================================= */
+
+function ExpenseCard({ item, onUpdate, onDelete, monnaie, showPrevu }) {
+  const [openSous, setOpenSous] = useState(false);
+  const total = itemTotal(item);
+  const prevu = item.prevu ?? null;
+  const pct = prevu ? Math.round(total/prevu*100) : null;
+  const over = prevu != null && total > prevu;
+
+  const addSous = () => onUpdate({ ...item, sousDepenses: [...(item.sousDepenses||[]), { id:uid(), nom:"", montant:0 }] });
+  const updateSous = (id, patch) => onUpdate({ ...item, sousDepenses: (item.sousDepenses||[]).map(d=>d.id===id?{...d,...patch}:d) });
+  const removeSous = (id) => onUpdate({ ...item, sousDepenses: (item.sousDepenses||[]).filter(d=>d.id!==id) });
+
+  return (
+    <div className="bb-exp-card">
+      <div className="bb-exp-top">
+        <div style={{flex:1}}>
+          <div className="bb-row" style={{marginBottom:4}}>
+            <input value={item.icone||"💳"} onChange={e=>onUpdate({...item, icone:e.target.value})} className="bb-input" style={{width:34, textAlign:"center", padding:"6px 4px", flex:"0 0 auto"}} />
+            <input value={item.nom} onChange={e=>onUpdate({...item, nom:e.target.value})} className="bb-input" style={{fontWeight:600}} placeholder="Nom de la dépense" />
+          </div>
+        </div>
+        <button className="bb-icon-btn" onClick={()=>onDelete(item.id)}><X size={13}/></button>
+      </div>
+
+      <div className="bb-between">
+        <div className="bb-row" style={{gap:5}}>
+          <input type="number" className="bb-input" style={{width:82}} value={item.montant} onChange={e=>onUpdate({...item, montant:e.target.value})} />
+          <span style={{fontSize:11, color:MUTED}}>/ mois</span>
+        </div>
+        <div style={{textAlign:"right"}}>
+          <div className="bb-exp-amt">{formatEuro(total, monnaie)}</div>
+          <div className="bb-exp-amt-sub">{formatEuro(total*12, monnaie)} / an</div>
+        </div>
+      </div>
+
+      {showPrevu && prevu != null && (
+        <div>
+          <ProgressBar pct={pct} color={over ? BRICK : GROUP_COLORS[item.groupe]} />
+          <div style={{fontSize:10.5, marginTop:4, color: over ? BRICK : MUTED}}>
+            {over ? <><AlertTriangle size={11} style={{verticalAlign:-1}}/> Au-dessus du prévu de {formatEuro(total-prevu, monnaie)}</> : `Prévu : ${formatEuro(prevu, monnaie)} / mois`}
+          </div>
+        </div>
+      )}
+
+      <button className="bb-link-btn" style={{padding:"2px 0"}} onClick={()=>setOpenSous(o=>!o)}>
+        <Plus size={12}/> {openSous ? "Masquer les sous-dépenses" : "+ sous-dépense"}
+      </button>
+      {openSous && (
+        <div style={{display:"flex", flexDirection:"column", gap:5}}>
+          {(item.sousDepenses||[]).map(d => (
+            <div key={d.id} className="bb-row">
+              <input className="bb-input" placeholder="Détail" value={d.nom} onChange={e=>updateSous(d.id,{nom:e.target.value})} />
+              <input className="bb-input" style={{width:70}} type="number" value={d.montant} onChange={e=>updateSous(d.id,{montant:e.target.value})} />
+              <button className="bb-icon-btn" onClick={()=>removeSous(d.id)}><X size={12}/></button>
+            </div>
+          ))}
+          <button className="bb-btn bb-btn-sm" onClick={addSous}><Plus size={11}/> Ajouter une sous-dépense</button>
+        </div>
+      )}
+
+      <div className="bb-exp-fields">
+        <Select value={item.groupe} onChange={v=>onUpdate({...item, groupe:v, essentiel: v==="besoins"})}
+          options={[{value:"besoins",label:"Besoin"},{value:"envies",label:"Envie"},{value:"epargne",label:"Épargne"}]} />
+        <Select value={item.categorie} onChange={v=>onUpdate({...item, categorie:v, icone: CATEGORY_ICONS[v]||item.icone})}
+          options={CATEGORIES} />
+        <Select value={item.essentiel ? "1" : "0"} onChange={v=>onUpdate({...item, essentiel: v==="1"})}
+          options={[{value:"1",label:"Essentiel"},{value:"0",label:"Non essentiel"}]} />
+      </div>
+    </div>
+  );
+}
+
+function QuickAdd({ onAdd, placeholder }) {
+  const [text, setText] = useState("");
+  const submit = () => {
+    if (!text.trim()) return;
+    const match = text.match(/(-?\d+([.,]\d+)?)\s*€?\s*$/);
+    const montant = match ? num(match[1].replace(",",".")) : 0;
+    const nom = match ? text.slice(0, match.index).trim() : text.trim();
+    onAdd(nom || "Nouvelle dépense", montant);
+    setText("");
+  };
+  return (
+    <div className="bb-row" style={{flex:1}}>
+      <Sparkles size={14} color={MUTED} />
+      <input className="bb-input" placeholder={placeholder} value={text} onChange={e=>setText(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submit()} />
+      <button className="bb-btn bb-btn-primary bb-btn-sm" onClick={submit}>Ajouter</button>
+    </div>
+  );
+}
+
+/* =========================================================================
+   BUDGET TYPE
+   ========================================================================= */
+
+function BudgetTypePage({ state, setState }) {
+  const { settings } = state;
+  const items = state.budgetType;
+  const total = items.reduce((s,i)=>s+itemTotal(i),0);
+  const totals = groupTotals(items);
+
+  const updateItem = (item) => setState(s=>({...s, budgetType: s.budgetType.map(i=>i.id===item.id?item:i)}));
+  const deleteItem = (id) => setState(s=>({...s, budgetType: s.budgetType.filter(i=>i.id!==id)}));
+  const addItem = (nom, montant) => setState(s=>({...s, budgetType: [...s.budgetType, {
+    id:uid(), nom, montant, icone:"💳", groupe:"besoins", categorie:"Divers", essentiel:true, sousDepenses:[]
+  }]}));
+  const viderTout = () => { if (confirm("Vider tout le budget type ?")) setState(s=>({...s, budgetType:[]})); };
+  const reorganiser = (groupe) => {
+    setState(s => {
+      const grp = s.budgetType.filter(i=>i.groupe===groupe).sort((a,b)=>a.nom.localeCompare(b.nom));
+      const others = s.budgetType.filter(i=>i.groupe!==groupe);
+      return { ...s, budgetType: [...others, ...grp] };
+    });
+  };
+
+  return (
+    <div>
+      <div className="bb-between">
+        <div>
+          <h1 className="bb-page-title">Budget type</h1>
+          <p className="bb-page-sub">Tes dépenses récurrentes : ton mois de référence.</p>
+        </div>
+        <StatCard label="Total mensuel" value={formatEuro(total, settings.monnaie)} sub={`${formatEuro(total*12, settings.monnaie)} / an`} />
+      </div>
+
+      <div className="bb-toolbar">
+        <QuickAdd onAdd={addItem} placeholder="Ajoute une dépense, ex. : Loyer 780 €" />
+        <button className="bb-btn bb-btn-sm bb-btn-danger" onClick={viderTout}><Trash2 size={12}/> Vider</button>
+      </div>
+
+      {["besoins","envies","epargne"].map(groupe => {
+        const list = items.filter(i=>i.groupe===groupe);
+        return (
+          <div key={groupe}>
+            <div className="bb-section-head">
+              <div>
+                <h3 className="bb-section-title" style={{color:GROUP_COLORS[groupe]}}>{groupe==="besoins"?"Besoins":groupe==="envies"?"Envies":"Épargne"}</h3>
+                <p className="bb-section-desc">{formatEuro(totals[groupe]||0, settings.monnaie)} / mois</p>
+              </div>
+              <button className="bb-btn bb-btn-sm" onClick={()=>reorganiser(groupe)}><ChevronDown size={12}/> Réorganiser (A→Z)</button>
+            </div>
+            {list.length===0 ? <EmptyState text={`Aucune dépense dans "${GROUP_LABELS[groupe]}" pour le moment.`} /> : (
+              <div className="bb-grid bb-grid-3">
+                {list.map(it => <ExpenseCard key={it.id} item={it} onUpdate={updateItem} onDelete={deleteItem} monnaie={settings.monnaie} showPrevu={false} />)}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* =========================================================================
+   IMPORT D'UN RELEVÉ BANCAIRE (CSV)
+   ========================================================================= */
+
+function guessCategorie(libelle) {
+  for (const [re, cat] of CATEGORY_KEYWORDS) if (re.test(libelle)) return cat;
+  return null;
+}
+function normLibelle(s) {
+  return (s||"").toLowerCase().replace(/[0-9]{2,}/g," ").replace(/\s+/g," ").trim();
+}
+
+function ImportCsvModal({ onClose, onValidate, monnaie }) {
+  const [step, setStep] = useState("upload");
+  const [rows, setRows] = useState([]);
+  const [error, setError] = useState("");
+
+  const handleFile = (file) => {
+    setError("");
+    Papa.parse(file, {
+      header: true, skipEmptyLines: true,
+      complete: (res) => {
+        try {
+          const fields = res.meta.fields || [];
+          const libCol = fields.find(f=>/libell|label|description|tiers/i.test(f)) || fields[1] || fields[0];
+          const montCol = fields.find(f=>/montant|amount/i.test(f));
+          const debitCol = fields.find(f=>/d[ée]bit/i.test(f));
+          const creditCol = fields.find(f=>/cr[ée]dit/i.test(f));
+
+          const groups = {};
+          res.data.forEach(row => {
+            let montant = 0;
+            if (montCol) montant = num(String(row[montCol]).replace(",","."));
+            else if (debitCol || creditCol) montant = -num(String(row[debitCol]||"0").replace(",",".")) + num(String(row[creditCol]||"0").replace(",","."));
+            if (montant >= 0) return; // on ne garde que les dépenses
+            const libelle = row[libCol] || "Dépense";
+            const key = normLibelle(libelle);
+            if (!groups[key]) groups[key] = { id:uid(), nom: libelle.trim(), montant:0, count:0 };
+            groups[key].montant += Math.abs(montant);
+            groups[key].count += 1;
+          });
+          const ENVIE_CATS = ["Restaurants & bars","Shopping","Sorties & loisirs","Abonnements","Sport"];
+          const EPARGNE_CATS = ["Épargne de précaution","Investissement"];
+          const list = Object.values(groups).map(g => {
+            const cat = guessCategorie(g.nom);
+            const groupe = EPARGNE_CATS.includes(cat) ? "epargne" : ENVIE_CATS.includes(cat) ? "envies" : "besoins";
+            return { ...g, categorie: cat || "— poste —", groupe, essentiel: groupe === "besoins", checked:true };
+          }).sort((a,b)=>b.montant-a.montant);
+          if (list.length === 0) setError("Aucune dépense détectée dans ce fichier. Vérifie qu'il contient bien une colonne montant/libellé.");
+          setRows(list);
+          setStep("review");
+        } catch(e) { setError("Impossible de lire ce fichier."); }
+      },
+      error: () => setError("Impossible de lire ce fichier.")
+    });
+  };
+
+  const updateRow = (id, patch) => setRows(rs => rs.map(r=>r.id===id?{...r,...patch}:r));
+
+  return (
+    <Modal title="Importer un relevé bancaire" onClose={onClose} width={720}>
+      {step === "upload" && (
+        <div>
+          <p style={{fontSize:12.5, color:MUTED, lineHeight:1.6}}>
+            Dépose un export CSV de ton compte bancaire (colonnes date / libellé / montant, ou débit / crédit). L'outil regroupe les dépenses par marchand et propose une catégorie automatiquement — tu valides ensuite.
+          </p>
+          <label className="bb-btn bb-btn-primary" style={{marginTop:10, display:"inline-flex", cursor:"pointer"}}>
+            <Upload size={13}/> Choisir un fichier CSV
+            <input type="file" accept=".csv" style={{display:"none"}} onChange={e=>{ const f=e.target.files?.[0]; if (f) handleFile(f); }} />
+          </label>
+          {error && <p style={{color:BRICK, fontSize:12, marginTop:10}}>{error}</p>}
+        </div>
+      )}
+      {step === "review" && (
+        <div>
+          <p style={{fontSize:12, color:MUTED, marginBottom:10}}>
+            {rows.length} dépense(s) trouvée(s), regroupée(s) en {rows.length} marchand(s). Décoche celles à ignorer, ajuste le poste si besoin, puis valide pour les ajouter au mois.
+          </p>
+          {error && <p style={{color:BRICK, fontSize:12}}>{error}</p>}
+          <div style={{maxHeight:340, overflowY:"auto"}}>
+            <table className="bb-table">
+              <thead><tr><th></th><th>Marchand</th><th>Montant</th><th>Poste</th></tr></thead>
+              <tbody>
+                {rows.map(r => (
+                  <tr key={r.id}>
+                    <td><input type="checkbox" checked={r.checked} onChange={e=>updateRow(r.id,{checked:e.target.checked})} /></td>
+                    <td>{r.nom} {r.count>1 && <span style={{color:MUTED, fontSize:10.5}}>({r.count}x)</span>}</td>
+                    <td style={{fontFamily:"'IBM Plex Mono',monospace"}}>{formatEuro(r.montant, monnaie)}</td>
+                    <td style={{minWidth:150}}>
+                      <Select value={r.categorie} onChange={v=>updateRow(r.id,{categorie:v})} options={["— poste —", ...CATEGORIES]} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="bb-row" style={{marginTop:14, justifyContent:"flex-end"}}>
+            <button className="bb-btn" onClick={onClose}>Annuler</button>
+            <button className="bb-btn bb-btn-primary" onClick={()=>onValidate(rows.filter(r=>r.checked))}>Valider l'import</button>
+          </div>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+/* =========================================================================
+   BUDGET DU MOIS
+   ========================================================================= */
+
+function BudgetMoisPage({ state, setState }) {
+  const { settings } = state;
+  const annee = settings.annee;
+  const [mois, setMois] = useState(MONTHS[new Date().getMonth()]);
+  const [search, setSearch] = useState("");
+  const [filterPoste, setFilterPoste] = useState("Tous les postes");
+  const [showImport, setShowImport] = useState(false);
+  const [showCopyOther, setShowCopyOther] = useState(false);
+
+  const key = monthKey(annee, mois);
+  const items = state.budgetMois[key] || [];
+
+  const setItems = (list) => setState(s => ({ ...s, budgetMois: { ...s.budgetMois, [key]: list } }));
+  const updateItem = (item) => setItems(items.map(i=>i.id===item.id?item:i));
+  const deleteItem = (id) => setItems(items.filter(i=>i.id!==id));
+  const addItem = (nom, montant) => setItems([...items, { id:uid(), nom, montant, icone:"💳", groupe:"besoins", categorie:"Divers", essentiel:true, sousDepenses:[], prevu:null }]);
+
+  const revenuMois = sumList(getMonthRevenus(state, annee, mois));
+  const depenseMois = items.reduce((s,i)=>s+itemTotal(i),0);
+  const budgetTypeTotal = state.budgetType.reduce((s,i)=>s+itemTotal(i),0);
+  const ecart = budgetTypeTotal - depenseMois;
+  const attribue = items.reduce((s,i)=>s+itemTotal(i),0);
+  const resteAAttribuer = revenuMois - attribue;
+
+  const copyFromList = (source) => {
+    const list = source.map(i => ({ ...i, id:uid(), prevu: itemTotal(i), budgetTypeId: i.budgetTypeId ?? i.id, montant: i.montant, sousDepenses: (i.sousDepenses||[]).map(d=>({...d,id:uid()})) }));
+    setItems(list);
+  };
+  const copierBudgetType = () => copyFromList(state.budgetType);
+  const copierMoisPrecedent = () => {
+    const idx = MONTHS.indexOf(mois);
+    if (idx===0) return alert("Pas de mois précédent dans cette année.");
+    copyFromList(state.budgetMois[monthKey(annee, MONTHS[idx-1])] || []);
+  };
+  const viderTousLesMois = () => {
+    if (confirm("Vider TOUS les mois de l'année ? Cette action est irréversible.")) {
+      setState(s => { const bm = { ...s.budgetMois }; MONTHS.forEach(m => delete bm[monthKey(annee,m)]); return { ...s, budgetMois: bm }; });
+    }
+  };
+  const validateImport = (rows) => {
+    const newItems = rows.map(r => ({
+      id: uid(), nom: r.nom, montant: r.montant, icone: CATEGORY_ICONS[r.categorie] || "💳",
+      groupe: r.groupe, categorie: r.categorie === "— poste —" ? "Divers" : r.categorie,
+      essentiel: r.essentiel, sousDepenses: [], prevu: null
+    }));
+    setItems([...items, ...newItems]);
+    setShowImport(false);
+  };
+
+  const totals = groupTotals(items);
+  const typeTotals = budgetTypeGroupTotals(state);
+
+  const filtered = items.filter(it => {
+    if (filterPoste !== "Tous les postes" && it.categorie !== filterPoste) return false;
+    if (search && !it.nom.toLowerCase().includes(search.toLowerCase())) return false;
+    return true;
+  });
+
+  return (
+    <div>
+      <div className="bb-between">
+        <div>
+          <h1 className="bb-page-title">Budget du mois</h1>
+          <p className="bb-page-sub">Tes vraies dépenses, pointées sur tes postes.</p>
+        </div>
+      </div>
+
+      <div className="bb-toolbar">
+        <button className="bb-icon-btn" onClick={()=>setMois(MONTHS[(MONTHS.indexOf(mois)+11)%12])}><ChevronLeft size={14}/></button>
+        <div style={{fontWeight:700, fontFamily:"'Fraunces',serif", fontSize:16, minWidth:140}}>{mois} {annee}</div>
+        <button className="bb-icon-btn" onClick={()=>setMois(MONTHS[(MONTHS.indexOf(mois)+1)%12])}><ChevronRight size={14}/></button>
+        <Select value={mois} onChange={setMois} options={MONTHS} style={{width:130}} />
+      </div>
+      <div className="bb-toolbar">
+        <button className="bb-btn bb-btn-sm" onClick={copierBudgetType}><ClipboardList size={12}/> Copier le budget type</button>
+        <button className="bb-btn bb-btn-sm" onClick={copierMoisPrecedent}><RefreshCw size={12}/> Copier le mois précédent</button>
+        <button className="bb-btn bb-btn-sm" onClick={()=>setShowCopyOther(true)}><CalendarDays size={12}/> Copier un autre mois</button>
+        <button className="bb-btn bb-btn-sm bb-btn-primary" onClick={()=>setShowImport(true)}><Upload size={12}/> Importer un relevé</button>
+        <button className="bb-btn bb-btn-sm bb-btn-danger" onClick={viderTousLesMois}><Trash2 size={12}/> Vider tous les mois</button>
+      </div>
+
+      <div className="bb-grid bb-grid-5">
+        <StatCard label="Revenu du mois" value={formatEuro(revenuMois, settings.monnaie)} accent={EMERALD} />
+        <StatCard label="Dépensé ce mois" value={formatEuro(depenseMois, settings.monnaie)} sub={revenuMois?`${Math.round(depenseMois/revenuMois*100)} % de ton revenu`:""} />
+        <StatCard label="Écart vs budget type" value={formatEuro(Math.abs(ecart), settings.monnaie)} sub={ecart>=0?"sous ton budget type, bravo":"au-dessus du budget type"} accent={ecart>=0?EMERALD:BRICK} />
+        <StatCard label="Reste à attribuer" value={formatEuro(resteAAttribuer, settings.monnaie)} sub="revenu moins dépenses pointées" />
+        <StatCard label="Dépense inhabituelle" value={items.length ? "À surveiller" : "Aucune"} sub="tout est dans les clous 🙂" />
+      </div>
+
+      <MethodSelector state={state} setState={setState} />
+
+      <div className="bb-toolbar" style={{marginTop:20}}>
+        <Search size={14} color={MUTED} />
+        <input className="bb-input" style={{maxWidth:220}} placeholder="Rechercher une dépense…" value={search} onChange={e=>setSearch(e.target.value)} />
+        <Select value={filterPoste} onChange={setFilterPoste} options={["Tous les postes", ...CATEGORIES]} style={{width:180}} />
+        <QuickAdd onAdd={addItem} placeholder="Ajoute une dépense, ex. : courses 42 €" />
+      </div>
+
+      {["besoins","envies","epargne"].map(groupe => {
+        const list = filtered.filter(i=>i.groupe===groupe);
+        if (!list.length && (search || filterPoste!=="Tous les postes")) return null;
+        const t = totals[groupe] || 0;
+        const tType = typeTotals[groupe] || 0;
+        const diff = t - tType;
+        return (
+          <div key={groupe}>
+            <div className="bb-section-head">
+              <h3 className="bb-section-title" style={{color:GROUP_COLORS[groupe]}}>{groupe==="besoins"?"Besoins":groupe==="envies"?"Envies":"Épargne"}</h3>
+              <div style={{textAlign:"right"}}>
+                <div style={{fontSize:11, color:MUTED}}>TOTAL CE MOIS</div>
+                <div style={{fontFamily:"'IBM Plex Mono',monospace", fontWeight:700, color: diff>0?BRICK:EMERALD}}>
+                  {formatEuro(t, settings.monnaie)} <span style={{fontSize:11, fontWeight:500}}>{diff>=0?"+":""}{formatEuro(diff, settings.monnaie)} vs prévu</span>
+                </div>
+              </div>
+            </div>
+            {list.length===0 ? <EmptyState text="Rien ici pour l'instant." /> : (
+              <div className="bb-grid bb-grid-3">
+                {list.map(it => <ExpenseCard key={it.id} item={it} onUpdate={updateItem} onDelete={deleteItem} monnaie={settings.monnaie} showPrevu={true} />)}
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {showImport && <ImportCsvModal onClose={()=>setShowImport(false)} onValidate={validateImport} monnaie={settings.monnaie} />}
+      {showCopyOther && (
+        <Modal title="Copier un autre mois" onClose={()=>setShowCopyOther(false)} width={340}>
+          <p style={{fontSize:12.5, color:MUTED, marginBottom:10}}>Choisis le mois source à dupliquer vers {mois}.</p>
+          <div style={{display:"flex", flexDirection:"column", gap:6}}>
+            {MONTHS.filter(m=>m!==mois).map(m => (
+              <button key={m} className="bb-btn" style={{justifyContent:"space-between"}}
+                onClick={()=>{ copyFromList(state.budgetMois[monthKey(annee,m)]||[]); setShowCopyOther(false); }}>
+                {m} <span style={{color:MUTED, fontWeight:400}}>{formatEuro(sumList((state.budgetMois[monthKey(annee,m)]||[]).map(i=>({montant:itemTotal(i)}))), settings.monnaie)}</span>
+              </button>
+            ))}
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+/* =========================================================================
+   ÉPARGNE DE PRÉCAUTION
+   ========================================================================= */
+
+function EpargnePage({ state, setState }) {
+  const { settings } = state;
+  const reponses = state.epargne.reponses || {};
+
+  const setReponse = (key, v) => setState(s => ({ ...s, epargne: { ...s.epargne, reponses: { ...s.epargne.reponses, [key]: v } } }));
+  const resetAll = () => { if (confirm("Refaire tout le questionnaire ?")) setState(s => ({ ...s, epargne: { ...s.epargne, reponses:{} } })); };
+
+  const score = VULN_CRITERIA.reduce((s,c)=> s + (reponses[c.key] ?? c.options[0].v), 0);
+  const objectifMois = 3 + Math.round((score/VULN_MAX)*3);
+  const besoinsTypeMensuel = state.budgetType.filter(i=>i.essentiel).reduce((s,i)=>s+itemTotal(i),0) || (state.budgetType.reduce((s,i)=>s+itemTotal(i),0));
+  const objectifEuros = objectifMois * besoinsTypeMensuel;
+
+  const revenuMoyenMensuel = MONTHS.reduce((s,m)=>s+sumList(getMonthRevenus(state, settings.annee, m)),0) / 12;
+  const conseille = methodConseille(settings.methode, revenuMoyenMensuel);
+  const capaciteEpargne = conseille ? conseille.epargne : Math.max(revenuMoyenMensuel - besoinsTypeMensuel, 0);
+
+  const allocationPct = state.epargne.allocationPct ?? 100;
+  const dejaEpargne = num(state.epargne.dejaEpargne);
+  const pct = objectifEuros ? clamp(dejaEpargne/objectifEuros*100,0,100) : 0;
+  const mensualitePrecaution = capaciteEpargne * allocationPct/100;
+  const moisRestants = mensualitePrecaution>0 ? Math.max(0, Math.ceil((objectifEuros-dejaEpargne)/mensualitePrecaution)) : null;
+
+  const situation = score/VULN_MAX < 0.3 ? { label:"Situation stable", color:EMERALD } : score/VULN_MAX < 0.6 ? { label:"Situation à surveiller", color:GOLD } : { label:"Situation vulnérable", color:BRICK };
+
+  return (
+    <div>
+      <h1 className="bb-page-title">Épargne de précaution</h1>
+      <p className="bb-page-sub">Ton matelas de sécurité : combien viser, et où tu en es.</p>
+
+      <Card>
+        <div className="bb-row">
+          <span className="bb-tag" style={{ background: `${situation.color}22`, color: situation.color }}>{situation.label}</span>
+          <span style={{fontWeight:700, fontFamily:"'Fraunces',serif", fontSize:16}}>{objectifMois} mois de charges recommandés</span>
+        </div>
+        <p style={{fontSize:12, color:MUTED, marginTop:8, lineHeight:1.6}}>
+          Ce chiffre vient de tes réponses ci-dessous : stabilité pro, charges familiales, filet de sécurité et le reste. Ajuste-les quand ta situation change, l'objectif se recalcule automatiquement.
+        </p>
+      </Card>
+
+      <div className="bb-grid bb-grid-5" style={{marginTop:14}}>
+        <StatCard label="Score de vulnérabilité" value={`${score} / ${VULN_MAX}`} sub="sur 8 critères" />
+        <StatCard label="Objectif en mois" value={objectifMois} sub="mois de besoins" />
+        <StatCard label="Objectif en €" value={formatEuro(objectifEuros, settings.monnaie)} sub={`${formatEuro(besoinsTypeMensuel, settings.monnaie)} × ${objectifMois}`} />
+        <StatCard label="Capacité d'épargne" value={formatEuro(capaciteEpargne, settings.monnaie)} sub="par mois (méthode choisie)" />
+        <StatCard label="Déjà épargné" value={formatEuro(dejaEpargne, settings.monnaie)} sub={`${Math.round(pct)} % de l'objectif`} accent={EMERALD} />
+      </div>
+
+      <div className="bb-section-head">
+        <div>
+          <h3 className="bb-section-title">Le détail de ton score</h3>
+        </div>
+        <button className="bb-btn bb-btn-sm" onClick={resetAll}><RefreshCw size={12}/> Refaire tout le questionnaire</button>
+      </div>
+      <div className="bb-grid bb-grid-3">
+        {VULN_CRITERIA.map(c => {
+          const v = reponses[c.key] ?? c.options[0].v;
+          return (
+            <div key={c.key} className="bb-vuln-card">
+              <div className="bb-between">
+                <div style={{fontSize:11, fontWeight:700, textTransform:"uppercase", color:MUTED}}>{c.label}</div>
+              </div>
+              <div className="bb-vuln-score" style={{margin:"4px 0 8px"}}>{v} <span style={{fontSize:12, fontWeight:400, color:MUTED}}>/ {c.max}</span></div>
+              <Select value={String(v)} onChange={val=>setReponse(c.key, num(val))}
+                options={c.options.map(o=>({value:String(o.v), label:o.t}))} />
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="bb-grid bb-grid-2" style={{marginTop:14}}>
+        <Card>
+          <div className="bb-section-title" style={{fontSize:14.5}}>Répartir ma capacité d'épargne mensuelle</div>
+          <p style={{fontSize:12, color:MUTED, margin:"4px 0 12px", lineHeight:1.6}}>
+            Le principe : le matelas de précaution se constitue en priorité, avant d'orienter l'épargne vers d'autres placements. Ajuste la répartition selon ta situation.
+          </p>
+          <div className="bb-between" style={{marginBottom:6}}>
+            <span style={{fontSize:12}}>Alloué à mon épargne de précaution</span>
+            <span style={{fontFamily:"'IBM Plex Mono',monospace", fontWeight:600}}>{allocationPct} %</span>
+          </div>
+          <input type="range" min="0" max="100" value={allocationPct}
+            onChange={e=>setState(s=>({...s, epargne:{...s.epargne, allocationPct:Number(e.target.value)}}))}
+            style={{width:"100%"}} />
+          <div style={{fontSize:11.5, color:MUTED, marginTop:8}}>Soit {formatEuro(mensualitePrecaution, settings.monnaie)} / mois vers ton matelas de sécurité.</div>
+        </Card>
+        <Card>
+          <div className="bb-section-title" style={{fontSize:14.5}}>Ma progression</div>
+          <div className="bb-row" style={{margin:"10px 0"}}>
+            <span style={{fontSize:12}}>Déjà épargné</span>
+            <input type="number" className="bb-input" style={{width:110}} value={dejaEpargne}
+              onChange={e=>setState(s=>({...s, epargne:{...s.epargne, dejaEpargne:e.target.value}}))} />
+          </div>
+          <ProgressBar pct={pct} color={EMERALD} />
+          <div style={{fontSize:11.5, color:MUTED, marginTop:8}}>
+            {formatEuro(dejaEpargne, settings.monnaie)} épargnés sur {formatEuro(objectifEuros, settings.monnaie)} ({Math.round(pct)} %).<br/>
+            {moisRestants != null && moisRestants > 0 ? <>À ce rythme, tu atteindras ton objectif dans <b>{moisRestants} mois</b>.</> :
+             pct >= 100 ? <span style={{color:EMERALD}}><CheckCircle2 size={12} style={{verticalAlign:-1}}/> Objectif atteint, bravo !</span> :
+             "Augmente ta capacité d'épargne pour estimer un délai."}
+          </div>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+/* =========================================================================
+   MONTAGE DE L'APPLICATION
+   ========================================================================= */
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+
+</script>
+
+<script>
+  // On transpile le JSX nous-mêmes avec la transformation "classic" (React.createElement),
+  // ce qui évite de dépendre du runtime JSX automatique (import react/jsx-runtime),
+  // incompatible avec un simple fichier HTML sans bundler.
+  (function () {
+    var src = document.getElementById("app-source").textContent;
+    try {
+      var out = Babel.transform(src, { presets: [["react", { runtime: "classic" }]] }).code;
+      var run = new Function("React", "ReactDOM", "window", "document", out);
+      run(React, ReactDOM, window, document);
+    } catch (e) {
+      document.getElementById("root").innerHTML =
+        '<pre style="padding:24px;color:#AE5040;white-space:pre-wrap;font-family:monospace;">Erreur au chargement de l\'outil :\n' +
+        (e && e.stack ? e.stack : e) + '</pre>';
+      console.error(e);
+    }
+  })();
+</script>
+</body>
+</html>
