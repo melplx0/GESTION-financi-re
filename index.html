@@ -45,6 +45,7 @@ const Search = (p) => <IconBase glyph="🔍" {...p} />;
 const ChevronDown = (p) => <IconBase glyph="⌄" {...p} />;
 const AlertTriangle = (p) => <IconBase glyph="⚠️" {...p} />;
 const CheckCircle2 = (p) => <IconBase glyph="✅" {...p} />;
+const PiggyBank = (p) => <IconBase glyph="🐷" {...p} />;
 
 /* =========================================================================
    TOKENS & CONSTANTS
@@ -207,6 +208,7 @@ function defaultState() {
     budgetType: [],      // [{id, nom, icone, montant, groupe, categorie, essentiel, sousDepenses}]
     budgetMois: {},      // { "2026-Juillet": [{...item, prevu, budgetTypeId}] }
     epargne: { reponses: {}, allocationPct: 100, dejaEpargne: 0 },
+    pots: [],            // [{id, nom, icone, type:"epargne"|"provision", montantCible, dejaEpargne, contributionMensuelle, aEcheance, echeanceMois, echeanceAnnee, notes}]
     victoires: []
   };
 }
@@ -312,6 +314,7 @@ const NAV_ITEMS = [
   { key:"budgetType", label:"Budget type", icon: ClipboardList },
   { key:"budgetMois", label:"Budget du mois", icon: CalendarDays },
   { key:"epargne", label:"Épargne de précaution", icon: ShieldCheck },
+  { key:"mesEpargnes", label:"Mes épargnes", icon: PiggyBank },
 ];
 
 function Sidebar({ page, setPage, state, setState, onExport, onImport, onHelp }) {
@@ -450,6 +453,8 @@ const CSS = `
   table.bb-table td { padding:6px 8px; border-bottom:1px solid ${BORDER}; vertical-align:middle; }
   .bb-vuln-card { border:1px solid ${BORDER}; border-radius:12px; padding:12px 14px; }
   .bb-vuln-score { font-family:'IBM Plex Mono',monospace; font-weight:700; font-size:20px; }
+  .bb-pot-card { border:1px solid ${BORDER}; border-radius:14px; padding:14px 16px; display:flex; flex-direction:column; gap:8px; }
+  .bb-pot-fields { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
   @media (max-width: 880px) {
     .bb-shell { grid-template-columns: 1fr; }
     .bb-sidebar { position:relative; height:auto; flex-direction:column; }
@@ -457,6 +462,7 @@ const CSS = `
     .bb-grid-3 { grid-template-columns: 1fr; }
     .bb-grid-2 { grid-template-columns: 1fr; }
     .bb-exp-fields { grid-template-columns:1fr; }
+    .bb-pot-fields { grid-template-columns:1fr; }
     .bb-main { padding:18px; }
   }
 `;
@@ -613,6 +619,7 @@ function App() {
           {page === "budgetType" && <BudgetTypePage {...pageProps} />}
           {page === "budgetMois" && <BudgetMoisPage {...pageProps} />}
           {page === "epargne" && <EpargnePage {...pageProps} />}
+          {page === "mesEpargnes" && <MesEpargnesPage {...pageProps} />}
         </main>
       </div>
       {showHelp && (
@@ -623,6 +630,7 @@ function App() {
             3. Renseigne tes <b>Revenus</b> mois par mois — l'outil s'adapte même s'ils varient.<br/><br/>
             4. Choisis ta <b>méthode de budget</b> (50/30/20 et 4 alternatives) pour comparer ce que tu dépenses à ce que tu t'étais fixé.<br/><br/>
             5. <b>Épargne de précaution</b> t'aide à calculer le matelas de sécurité adapté à ta situation et à suivre ta progression.<br/><br/>
+            6. <b>Mes épargnes</b> regroupe tes objectifs d'épargne libres et tes provisions (dépenses futures connues, avec ou sans échéance).<br/><br/>
             Toutes tes données restent uniquement dans ton espace personnel.
           </p>
         </Modal>
@@ -1525,6 +1533,278 @@ function EpargnePage({ state, setState }) {
           </div>
         </Card>
       </div>
+    </div>
+  );
+}
+
+/* =========================================================================
+   MES ÉPARGNES  (objectifs d'épargne libres + provisions)
+   ========================================================================= */
+
+// mois restants jusqu'à une échéance (mois/année) à partir d'aujourd'hui
+function moisJusqua(mois, annee) {
+  const now = new Date();
+  const cible = new Date(annee, MONTHS.indexOf(mois), 1);
+  const cour = new Date(now.getFullYear(), now.getMonth(), 1);
+  const diff = (cible.getFullYear()-cour.getFullYear())*12 + (cible.getMonth()-cour.getMonth());
+  return diff;
+}
+
+function potStats(pot) {
+  const cible = pot.montantCible != null && pot.montantCible !== "" ? num(pot.montantCible) : null;
+  const actuel = num(pot.dejaEpargne);
+  const contrib = num(pot.contributionMensuelle);
+  const pct = cible ? clamp(actuel/cible*100, 0, 100) : null;
+  let moisRestantsEcheance = null, mensualiteRecommandee = null, enBonneVoie = null, moisProjection = null;
+
+  if (pot.aEcheance && pot.echeanceMois) {
+    moisRestantsEcheance = moisJusqua(pot.echeanceMois, num(pot.echeanceAnnee));
+    if (cible != null) {
+      const restant = Math.max(cible - actuel, 0);
+      mensualiteRecommandee = moisRestantsEcheance > 0 ? restant / moisRestantsEcheance : restant;
+      enBonneVoie = restant <= 0 ? true : (contrib > 0 ? contrib >= mensualiteRecommandee - 0.5 : moisRestantsEcheance <= 0);
+    }
+  } else if (cible != null && contrib > 0) {
+    moisProjection = Math.max(0, Math.ceil((cible - actuel) / contrib));
+  }
+
+  return { cible, actuel, contrib, pct, moisRestantsEcheance, mensualiteRecommandee, enBonneVoie, moisProjection };
+}
+
+function PotCard({ pot, onUpdate, onDelete, monnaie }) {
+  const st = potStats(pot);
+  const isProvision = pot.type === "provision";
+  const tagColor = isProvision ? GOLD : EMERALD;
+
+  return (
+    <div className="bb-pot-card">
+      <div className="bb-exp-top">
+        <div style={{flex:1}}>
+          <div className="bb-row" style={{marginBottom:4}}>
+            <input value={pot.icone||"🐷"} onChange={e=>onUpdate({...pot, icone:e.target.value})} className="bb-input" style={{width:34, textAlign:"center", padding:"6px 4px", flex:"0 0 auto"}} />
+            <input value={pot.nom} onChange={e=>onUpdate({...pot, nom:e.target.value})} className="bb-input" style={{fontWeight:600}} placeholder="Nom (ex. Impôts, Vacances, Voiture…)" />
+          </div>
+          <span className="bb-tag" style={{ background: `${tagColor}22`, color: tagColor }}>{isProvision ? "Provision" : "Épargne"}</span>
+        </div>
+        <button className="bb-icon-btn" onClick={()=>onDelete(pot.id)}><X size={13}/></button>
+      </div>
+
+      <div className="bb-pot-fields">
+        <Select value={pot.type} onChange={v=>onUpdate({...pot, type:v})}
+          options={[{value:"epargne",label:"Épargne (objectif libre)"},{value:"provision",label:"Provision (dépense future connue)"}]} />
+        <Select value={pot.aEcheance ? "1" : "0"} onChange={v=>onUpdate({...pot, aEcheance: v==="1"})}
+          options={[{value:"0",label:"Sans échéance fixe"},{value:"1",label:"Avec échéance fixe"}]} />
+      </div>
+
+      {pot.aEcheance && (
+        <div className="bb-pot-fields">
+          <Select value={pot.echeanceMois || MONTHS[0]} onChange={v=>onUpdate({...pot, echeanceMois:v})} options={MONTHS} />
+          <input type="number" className="bb-input" placeholder="Année" value={pot.echeanceAnnee ?? new Date().getFullYear()}
+            onChange={e=>onUpdate({...pot, echeanceAnnee:e.target.value})} />
+        </div>
+      )}
+
+      <div className="bb-pot-fields">
+        <div>
+          <div style={{fontSize:10.5, color:MUTED, marginBottom:3}}>Déjà mis de côté</div>
+          <input type="number" className="bb-input" value={pot.dejaEpargne} onChange={e=>onUpdate({...pot, dejaEpargne:e.target.value})} />
+        </div>
+        <div>
+          <div style={{fontSize:10.5, color:MUTED, marginBottom:3}}>Objectif (optionnel)</div>
+          <input type="number" className="bb-input" value={pot.montantCible ?? ""} placeholder="—" onChange={e=>onUpdate({...pot, montantCible:e.target.value})} />
+        </div>
+      </div>
+
+      <div className="bb-pot-fields">
+        <div style={{gridColumn:"1 / -1"}}>
+          <div style={{fontSize:10.5, color:MUTED, marginBottom:3}}>Versement mensuel prévu</div>
+          <input type="number" className="bb-input" value={pot.contributionMensuelle} onChange={e=>onUpdate({...pot, contributionMensuelle:e.target.value})} />
+        </div>
+      </div>
+
+      {st.cible != null && (
+        <div>
+          <ProgressBar pct={st.pct} color={tagColor} />
+          <div style={{fontSize:10.5, marginTop:4, color:MUTED}}>
+            {formatEuro(st.actuel, monnaie)} / {formatEuro(st.cible, monnaie)} · {Math.round(st.pct)}%
+          </div>
+        </div>
+      )}
+
+      <div style={{fontSize:11, color:MUTED, lineHeight:1.5}}>
+        {pot.aEcheance && st.moisRestantsEcheance != null ? (
+          st.moisRestantsEcheance > 0 ? (
+            <>
+              Échéance dans <b>{st.moisRestantsEcheance} mois</b> ({pot.echeanceMois} {pot.echeanceAnnee}).{" "}
+              {st.mensualiteRecommandee != null && st.mensualiteRecommandee > 0 && (
+                <>Il faut environ <b>{formatEuro(st.mensualiteRecommandee, monnaie)}/mois</b> pour y arriver. </>
+              )}
+              {st.enBonneVoie === true && <span style={{color:EMERALD}}><CheckCircle2 size={11} style={{verticalAlign:-1}}/> En bonne voie.</span>}
+              {st.enBonneVoie === false && <span style={{color:BRICK}}><AlertTriangle size={11} style={{verticalAlign:-1}}/> Rythme actuel insuffisant.</span>}
+            </>
+          ) : <span style={{color:BRICK}}><AlertTriangle size={11} style={{verticalAlign:-1}}/> Échéance dépassée ou ce mois-ci.</span>
+        ) : st.moisProjection != null ? (
+          st.moisProjection > 0 ? <>À ce rythme, objectif atteint dans <b>{st.moisProjection} mois</b>.</> :
+            <span style={{color:EMERALD}}><CheckCircle2 size={11} style={{verticalAlign:-1}}/> Objectif atteint, bravo !</span>
+        ) : st.cible != null ? "Ajoute un versement mensuel pour estimer un délai." : "Réserve libre, sans objectif chiffré."}
+      </div>
+    </div>
+  );
+}
+
+function AddPotForm({ onAdd, defaultType }) {
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState(null);
+
+  const startAdd = (type) => {
+    setDraft({ nom:"", type, aEcheance:false, echeanceMois:MONTHS[0], echeanceAnnee:new Date().getFullYear(), montantCible:"", dejaEpargne:0, contributionMensuelle:0, icone: type==="provision"?"🧾":"🐷" });
+    setOpen(true);
+  };
+
+  const submit = () => {
+    if (!draft.nom.trim()) return;
+    onAdd(draft);
+    setOpen(false);
+    setDraft(null);
+  };
+
+  if (!open) {
+    return (
+      <div className="bb-row">
+        <button className="bb-btn bb-btn-primary bb-btn-sm" onClick={()=>startAdd("epargne")}><Plus size={12}/> Nouvelle épargne</button>
+        <button className="bb-btn bb-btn-sm" onClick={()=>startAdd("provision")}><Plus size={12}/> Nouvelle provision</button>
+      </div>
+    );
+  }
+
+  return (
+    <Card style={{marginBottom:14}}>
+      <div className="bb-section-title" style={{fontSize:14, marginBottom:10}}>
+        {draft.type==="provision" ? "Nouvelle provision" : "Nouvelle épargne"}
+      </div>
+      <div style={{display:"flex", flexDirection:"column", gap:8}}>
+        <input className="bb-input" placeholder="Nom (ex. Impôts, Vacances, Voiture…)" value={draft.nom} onChange={e=>setDraft(d=>({...d, nom:e.target.value}))} />
+        <div className="bb-pot-fields">
+          <Select value={draft.aEcheance ? "1" : "0"} onChange={v=>setDraft(d=>({...d, aEcheance: v==="1"}))}
+            options={[{value:"0",label:"Sans échéance fixe"},{value:"1",label:"Avec échéance fixe"}]} />
+          <input type="number" className="bb-input" placeholder="Objectif (€, optionnel)" value={draft.montantCible} onChange={e=>setDraft(d=>({...d, montantCible:e.target.value}))} />
+        </div>
+        {draft.aEcheance && (
+          <div className="bb-pot-fields">
+            <Select value={draft.echeanceMois} onChange={v=>setDraft(d=>({...d, echeanceMois:v}))} options={MONTHS} />
+            <input type="number" className="bb-input" placeholder="Année" value={draft.echeanceAnnee} onChange={e=>setDraft(d=>({...d, echeanceAnnee:e.target.value}))} />
+          </div>
+        )}
+        <div className="bb-pot-fields">
+          <input type="number" className="bb-input" placeholder="Déjà mis de côté" value={draft.dejaEpargne} onChange={e=>setDraft(d=>({...d, dejaEpargne:e.target.value}))} />
+          <input type="number" className="bb-input" placeholder="Versement mensuel" value={draft.contributionMensuelle} onChange={e=>setDraft(d=>({...d, contributionMensuelle:e.target.value}))} />
+        </div>
+        <div className="bb-row" style={{justifyContent:"flex-end"}}>
+          <button className="bb-btn" onClick={()=>{ setOpen(false); setDraft(null); }}>Annuler</button>
+          <button className="bb-btn bb-btn-primary" onClick={submit}>Créer</button>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+function MesEpargnesPage({ state, setState }) {
+  const { settings } = state;
+  const [filter, setFilter] = useState("tous");
+  const pots = state.pots || [];
+
+  const updatePot = (pot) => setState(s=>({...s, pots: s.pots.map(p=>p.id===pot.id?pot:p)}));
+  const deletePot = (id) => setState(s=>({...s, pots: s.pots.filter(p=>p.id!==id)}));
+  const addPot = (draft) => setState(s=>({...s, pots: [...s.pots, { id:uid(), ...draft }]}));
+
+  const filtered = pots.filter(p => filter==="tous" ? true : p.type===filter);
+
+  const totalActuel = pots.reduce((s,p)=>s+num(p.dejaEpargne),0);
+  const totalCible = pots.reduce((s,p)=> p.montantCible!=null && p.montantCible!=="" ? s+num(p.montantCible) : s, 0);
+  const totalEpargnes = pots.filter(p=>p.type==="epargne").reduce((s,p)=>s+num(p.dejaEpargne),0);
+  const totalProvisions = pots.filter(p=>p.type==="provision").reduce((s,p)=>s+num(p.dejaEpargne),0);
+
+  // épargne de précaution (lecture seule, tirée de l'onglet dédié)
+  const dejaEpargnePrecaution = num(state.epargne.dejaEpargne);
+  const besoinsTypeMensuel = state.budgetType.filter(i=>i.essentiel).reduce((s,i)=>s+itemTotal(i),0);
+  const vulnScore = VULN_CRITERIA.reduce((s,c)=> s + (state.epargne.reponses[c.key] ?? c.options[0].v), 0);
+  const objectifMoisPrecaution = 3 + Math.round((vulnScore/VULN_MAX)*3);
+  const objectifPrecaution = objectifMoisPrecaution * besoinsTypeMensuel;
+  const pctPrecaution = objectifPrecaution ? clamp(dejaEpargnePrecaution/objectifPrecaution*100,0,100) : 0;
+
+  const totalGeneral = totalActuel + dejaEpargnePrecaution;
+
+  const barData = filtered.filter(p=>p.montantCible!=null && p.montantCible!=="").map(p => ({
+    name: p.nom || "—", Cible: Math.round(num(p.montantCible)), Épargné: Math.round(num(p.dejaEpargne))
+  }));
+
+  const donutData = [
+    ...filtered.filter(p=>num(p.dejaEpargne)>0).map((p,i) => ({ name:p.nom||"—", value:Math.round(num(p.dejaEpargne)), color: p.type==="provision" ? GOLD : [EMERALD,"#7C8FA6","#8A6BAE","#C08A2E"][i%4] })),
+  ];
+  if (dejaEpargnePrecaution > 0) donutData.push({ name:"Épargne de précaution", value:Math.round(dejaEpargnePrecaution), color:BRICK });
+
+  return (
+    <div>
+      <h1 className="bb-page-title">Mes épargnes</h1>
+      <p className="bb-page-sub">Tes objectifs d'épargne libres et tes provisions (dépenses futures connues), au même endroit.</p>
+
+      <div className="bb-grid bb-grid-5">
+        <StatCard label="Total mis de côté" value={formatEuro(totalGeneral, settings.monnaie)} sub="tous pots + précaution" accent={EMERALD} />
+        <StatCard label="Dont épargnes" value={formatEuro(totalEpargnes, settings.monnaie)} sub={`${pots.filter(p=>p.type==="epargne").length} objectif(s)`} />
+        <StatCard label="Dont provisions" value={formatEuro(totalProvisions, settings.monnaie)} sub={`${pots.filter(p=>p.type==="provision").length} provision(s)`} accent={GOLD} />
+        <StatCard label="Objectifs cumulés" value={formatEuro(totalCible, settings.monnaie)} sub="cibles chiffrées uniquement" />
+        <StatCard label="Épargne de précaution" value={formatEuro(dejaEpargnePrecaution, settings.monnaie)} sub={`${Math.round(pctPrecaution)} % de l'objectif`} accent={BRICK} />
+      </div>
+
+      <Card style={{marginTop:14}}>
+        <div className="bb-between">
+          <div className="bb-section-title" style={{fontSize:14.5}}>🛡️ Épargne de précaution (lecture seule)</div>
+        </div>
+        <div style={{fontSize:12, color:MUTED, margin:"4px 0 10px"}}>
+          Gérée dans l'onglet dédié — objectif de {objectifMoisPrecaution} mois de besoins essentiels.
+        </div>
+        <ProgressBar pct={pctPrecaution} color={BRICK} />
+        <div style={{display:"flex",justifyContent:"space-between",fontSize:11.5,color:MUTED,marginTop:6}}>
+          <span>{formatEuro(dejaEpargnePrecaution, settings.monnaie)} épargnés</span>
+          <span>Objectif {formatEuro(objectifPrecaution, settings.monnaie)} · {Math.round(pctPrecaution)}%</span>
+        </div>
+      </Card>
+
+      <div className="bb-toolbar" style={{marginTop:20}}>
+        <div className="bb-tabs">
+          <button className={`bb-tab ${filter==="tous"?"active":""}`} onClick={()=>setFilter("tous")}>Tous</button>
+          <button className={`bb-tab ${filter==="epargne"?"active":""}`} onClick={()=>setFilter("epargne")}>Épargnes</button>
+          <button className={`bb-tab ${filter==="provision"?"active":""}`} onClick={()=>setFilter("provision")}>Provisions</button>
+        </div>
+      </div>
+
+      <AddPotForm onAdd={addPot} />
+
+      {filtered.length===0 ? (
+        <EmptyState text="Aucun pot pour l'instant. Crée ta première épargne ou provision ci-dessus." />
+      ) : (
+        <div className="bb-grid bb-grid-3">
+          {filtered.map(p => <PotCard key={p.id} pot={p} onUpdate={updatePot} onDelete={deletePot} monnaie={settings.monnaie} />)}
+        </div>
+      )}
+
+      {(barData.length > 0 || donutData.length > 0) && (
+        <div className="bb-grid bb-grid-2" style={{marginTop:14, alignItems:"stretch"}}>
+          {barData.length > 0 && (
+            <Card>
+              <div className="bb-section-title" style={{fontSize:14.5, marginBottom:10}}>Épargné vs objectif, par pot</div>
+              <GroupedBarChart height={220} monnaie={settings.monnaie} data={barData}
+                series={[{key:"Cible",label:"Objectif",color:BORDER},{key:"Épargné",label:"Épargné",color:EMERALD}]} />
+            </Card>
+          )}
+          {donutData.length > 0 && (
+            <Card>
+              <div className="bb-section-title" style={{fontSize:14.5, marginBottom:10}}>Répartition de ce qui est déjà mis de côté</div>
+              <DonutChart height={200} monnaie={settings.monnaie} data={donutData} />
+            </Card>
+          )}
+        </div>
+      )}
     </div>
   );
 }
